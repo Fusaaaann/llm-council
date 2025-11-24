@@ -161,3 +161,29 @@
   background: #ccc;
   border-color: #ccc;
 }
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.action-button {
+  padding: 6px 12px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  color: #666;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action-button:hover {
+  background: #f5f5f5;
+  border-color: #4a90e2;
+  color: #4a90e2;
+}

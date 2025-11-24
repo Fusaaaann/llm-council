@@ -9,9 +9,12 @@ export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  onEditMessage,
+  onRetryMessage,
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -20,6 +23,15 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [conversation]);
+
+  const handleEdit = (content) => {
+    onEditMessage(content);
+    setInput(content);
+    // Focus the input field after a brief delay to allow state update
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -57,18 +69,44 @@ export default function ChatInterface({
             <p>Ask a question to consult the LLM Council</p>
           </div>
         ) : (
-          conversation.messages.map((msg, index) => (
-            <div key={index} className="message-group">
-              {msg.role === 'user' ? (
-                <div className="user-message">
-                  <div className="message-label">You</div>
-                  <div className="message-content">
-                    <div className="markdown-content">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+          conversation.messages.map((msg, index) => {
+            const isLastUserMessage = msg.role === 'user' &&
+              index === conversation.messages.length - 2 &&
+              conversation.messages[conversation.messages.length - 1]?.role === 'assistant';
+            const isOnlyUserMessage = msg.role === 'user' &&
+              index === conversation.messages.length - 1;
+            const showActions = (isLastUserMessage || isOnlyUserMessage) && !isLoading;
+
+            return (
+              <div key={index} className="message-group">
+                {msg.role === 'user' ? (
+                  <div className="user-message">
+                    <div className="message-label">You</div>
+                    <div className="message-content">
+                      <div className="markdown-content">
+                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      </div>
+                      {showActions && (
+                        <div className="message-actions">
+                          <button
+                            className="action-button"
+                            onClick={() => handleEdit(msg.content)}
+                            title="Edit message"
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            className="action-button"
+                            onClick={() => onRetryMessage(msg.content)}
+                            title="Retry this message"
+                          >
+                            🔄 Retry
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              ) : (
+                ) : (
                 <div className="assistant-message">
                   <div className="message-label">LLM Council</div>
 
@@ -107,7 +145,8 @@ export default function ChatInterface({
                 </div>
               )}
             </div>
-          ))
+          );
+          })
         )}
 
         {isLoading && (
@@ -120,26 +159,25 @@ export default function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.messages.length === 0 && (
-        <form className="input-form" onSubmit={handleSubmit}>
-          <textarea
-            className="message-input"
-            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading}
-            rows={3}
-          />
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim() || isLoading}
-          >
-            Send
-          </button>
-        </form>
-      )}
+      <form className="input-form" onSubmit={handleSubmit}>
+        <textarea
+          ref={inputRef}
+          className="message-input"
+          placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isLoading}
+          rows={3}
+        />
+        <button
+          type="submit"
+          className="send-button"
+          disabled={!input.trim() || isLoading}
+        >
+          Send
+        </button>
+      </form>
     </div>
   );
 }

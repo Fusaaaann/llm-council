@@ -57,17 +57,51 @@ function App() {
     setCurrentConversationId(id);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleEditMessage = (content) => {
+    // Remove the last user message and its response (if any)
+    setCurrentConversation((prev) => {
+      const messages = [...prev.messages];
+      // Remove last message if it's assistant, then remove last user message
+      if (messages[messages.length - 1]?.role === 'assistant') {
+        messages.pop();
+      }
+      if (messages[messages.length - 1]?.role === 'user') {
+        messages.pop();
+      }
+      return { ...prev, messages };
+    });
+    // Note: The input field will be populated via ChatInterface
+  };
+
+  const handleRetryMessage = async (content) => {
+    if (!currentConversationId || isLoading) return;
+
+    // Remove the last assistant response (if any)
+    setCurrentConversation((prev) => {
+      const messages = [...prev.messages];
+      if (messages[messages.length - 1]?.role === 'assistant') {
+        messages.pop();
+      }
+      return { ...prev, messages };
+    });
+
+    // Resend the message (skip adding user message since it already exists)
+    await handleSendMessage(content, true);
+  };
+
+  const handleSendMessage = async (content, skipAddingUserMessage = false) => {
     if (!currentConversationId) return;
 
     setIsLoading(true);
     try {
-      // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
+      // Optimistically add user message to UI (unless retrying)
+      if (!skipAddingUserMessage) {
+        const userMessage = { role: 'user', content };
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [...(prev?.messages || []), userMessage],
+        }));
+      }
 
       // Create a partial assistant message that will be updated progressively
       const assistantMessage = {
@@ -86,7 +120,7 @@ function App() {
       // Add the partial assistant message
       setCurrentConversation((prev) => ({
         ...prev,
-        messages: [...prev.messages, assistantMessage],
+        messages: [...(prev?.messages || []), assistantMessage],
       }));
 
       // Send message with streaming
@@ -192,6 +226,8 @@ function App() {
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
+        onEditMessage={handleEditMessage}
+        onRetryMessage={handleRetryMessage}
         isLoading={isLoading}
       />
     </div>

@@ -6,6 +6,12 @@ This file contains technical details, architectural decisions, and important imp
 
 LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
 
+**Key Features:**
+- **Streaming responses**: Progressive display of each stage as it completes via Server-Sent Events
+- **Metadata persistence**: label_to_model and aggregate_rankings now saved with messages
+- **Edit/Retry actions**: Users can edit or retry their last message
+- **Multi-turn conversations**: Input field always visible for continued dialogue
+
 ## Architecture
 
 ### Backend Structure (`backend/`)
@@ -36,26 +42,39 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 
 **`storage.py`**
 - JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3}`
-- Note: metadata (label_to_model, aggregate_rankings) is NOT persisted to storage, only returned via API
+- Each conversation: `{id, created_at, title, messages[]}`
+- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}`
+- **UPDATED**: metadata (label_to_model, aggregate_rankings) is NOW persisted to storage for full conversation history
 
 **`main.py`**
 - FastAPI app with CORS enabled for localhost:5173 and localhost:3000
-- POST `/api/conversations/{id}/message` returns metadata in addition to stages
+- **Endpoints:**
+  - POST `/api/conversations/{id}/message` - Batch response with all stages + metadata
+  - POST `/api/conversations/{id}/message/stream` - Server-Sent Events streaming (PREFERRED)
+- Streaming endpoint sends events: stage1_start, stage1_complete, stage2_start, stage2_complete, stage3_start, stage3_complete, title_complete, complete, error
+- Title generation runs in parallel with Stage 1 to minimize perceived latency
 - Metadata includes: label_to_model mapping and aggregate_rankings
 
 ### Frontend Structure (`frontend/src/`)
 
 **`App.jsx`**
 - Main orchestration: manages conversations list and current conversation
-- Handles message sending and metadata storage
-- Important: metadata is stored in the UI state for display but not persisted to backend JSON
+- Handles message sending via streaming API (`sendMessageStream`)
+- **New handlers:**
+  - `handleEditMessage()`: Removes last user message + assistant response, populates input field
+  - `handleRetryMessage()`: Removes last assistant response, resends user message
+- Metadata now persisted in backend and reloaded from storage
+- Progressive UI updates: each stage updates in real-time as events arrive
 
 **`components/ChatInterface.jsx`**
-- Multiline textarea (3 rows, resizable)
+- **UPDATED**: Input field always visible (not just for first message)
+- Multiline textarea (3 rows, resizable) with ref for programmatic focus
 - Enter to send, Shift+Enter for new line
 - User messages wrapped in markdown-content class for padding
+- **New features:**
+  - Edit/Retry buttons on last user message (when not loading)
+  - Edit button populates input field and focuses it
+  - Progressive loading indicators for each stage during streaming
 
 **`components/Stage1.jsx`**
 - Tab view of individual model responses
@@ -130,16 +149,42 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
 2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
 3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
+4. **Metadata Persistence**: ~~Metadata is ephemeral (not persisted)~~ **FIXED** - Metadata now persisted in storage.py
+5. **Streaming Connection**: EventSource connections can timeout; frontend handles reconnection via error events
+
+## Recent Updates (Latest Session)
+
+### Streaming Implementation
+- Added `/api/conversations/{id}/message/stream` endpoint with Server-Sent Events
+- Frontend now uses streaming by default for real-time stage updates
+- Title generation parallelized with Stage 1 to reduce perceived latency
+
+### Metadata Persistence
+- Modified `storage.py` to accept optional metadata parameter in `add_assistant_message()`
+- Backend now saves label_to_model and aggregate_rankings with each message
+- Metadata survives page reloads and conversation switching
+
+### Edit/Retry UI
+- Added Edit and Retry buttons to last user message
+- Edit functionality: removes messages, populates input field, focuses textarea
+- Retry functionality: removes assistant response, resends query
+- Buttons only show when not loading and on the last user message
+
+### Multi-turn Support
+- Input field now always visible (not just for first message)
+- Conversations can continue indefinitely with full context
+- Each turn includes all previous messages for continuity
 
 ## Future Enhancement Ideas
 
 - Configurable council/chairman via UI instead of config file
-- Streaming responses instead of batch loading
+- ~~Streaming responses instead of batch loading~~ **DONE** ✓
 - Export conversations to markdown/PDF
 - Model performance analytics over time
 - Custom ranking criteria (not just accuracy/insight)
 - Support for reasoning models (o1, etc.) with special handling
+- Delete conversation functionality
+- Stop/cancel ongoing council deliberation
 
 ## Testing Notes
 
@@ -147,20 +192,48 @@ Use `test_openrouter.py` to verify API connectivity and test different model ide
 
 ## Data Flow Summary
 
+### Streaming Flow (Current Implementation)
 ```
-User Query
+User Query → POST /api/conversations/{id}/message/stream
+    ↓
+[Event: stage1_start] → UI shows "Stage 1 Loading..."
     ↓
 Stage 1: Parallel queries → [individual responses]
     ↓
-Stage 2: Anonymize → Parallel ranking queries → [evaluations + parsed rankings]
+[Event: stage1_complete] → UI displays tabs with responses
     ↓
-Aggregate Rankings Calculation → [sorted by avg position]
+[Event: stage2_start] → UI shows "Stage 2 Loading..."
+    ↓
+Stage 2: Anonymize → Parallel ranking queries → [evaluations + rankings]
+    ↓
+Calculate aggregate rankings → metadata assembled
+    ↓
+[Event: stage2_complete + metadata] → UI displays rankings
+    ↓
+[Event: stage3_start] → UI shows "Stage 3 Loading..."
     ↓
 Stage 3: Chairman synthesis with full context
     ↓
-Return: {stage1, stage2, stage3, metadata}
+[Event: stage3_complete] → UI displays final answer
     ↓
-Frontend: Display with tabs + validation UI
+[Event: title_complete] (first message only) → Sidebar updates
+    ↓
+[Event: complete] → Save to storage with metadata → Done
 ```
 
-The entire flow is async/parallel where possible to minimize latency.
+### Storage Flow
+```
+In-memory State (during stream)
+    ↓
+storage.add_assistant_message(stage1, stage2, stage3, metadata)
+    ↓
+JSON file: data/conversations/{id}.json
+    ↓
+{
+  messages: [
+    {role: "assistant", stage1: [...], stage2: [...], stage3: {...}, metadata: {...}}
+  ]
+}
+```
+
+The entire flow is async/parallel where possible to minimize latency. Title generation runs concurrently with Stage 1.

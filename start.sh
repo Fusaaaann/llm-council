@@ -16,7 +16,7 @@ sleep 2
 # Start frontend
 echo "Starting frontend on http://localhost:5173..."
 cd frontend
-npm run dev &
+ulimit -n 65536 && bun run dev &
 FRONTEND_PID=$!
 
 echo ""
