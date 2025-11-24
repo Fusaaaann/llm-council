@@ -107,11 +107,13 @@ function App() {
       const assistantMessage = {
         role: 'assistant',
         stage1: null,
+        stage1_5: null,
         stage2: null,
         stage3: null,
         metadata: null,
         loading: {
           stage1: false,
+          stage1_5: false,
           stage2: false,
           stage3: false,
         },
@@ -141,6 +143,43 @@ function App() {
               const lastMsg = messages[messages.length - 1];
               lastMsg.stage1 = event.data;
               lastMsg.loading.stage1 = false;
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'stage1_5_questions_start':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              lastMsg.loading.stage1_5 = true;
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'stage1_5_questions_complete':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              // Store questions, but keep loading indicator
+              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
+              lastMsg.stage1_5.questions = event.data;
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'stage1_5_answers_start':
+            // Keep loading indicator
+            break;
+
+          case 'stage1_5_answers_complete':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              // Add answers and complete stage1_5
+              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
+              lastMsg.stage1_5.answers = event.data;
+              lastMsg.stage1_5.label_to_model = event.label_to_model;
+              lastMsg.loading.stage1_5 = false;
               return { ...prev, messages };
             });
             break;

@@ -10,7 +10,7 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage1_5_cross_interrogation, stage1_5_collect_answers, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 
 app = FastAPI(title="LLM Council API")
 
@@ -153,6 +153,16 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             stage1_results = await stage1_collect_responses(request.content)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
+            # Stage 1.5: Cross-interrogation (questions)
+            yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
+            questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(request.content, stage1_results)
+            yield f"data: {json.dumps({'type': 'stage1_5_questions_complete', 'data': questions_results})}\n\n"
+
+            # Stage 1.5: Collect answers
+            yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
+            answers_results = await stage1_5_collect_answers(request.content, stage1_results, questions_results, label_to_model_interrogation)
+            yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
+
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
@@ -170,17 +180,23 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 storage.update_conversation_title(conversation_id, title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-            # Save complete assistant message with metadata
+            # Save complete assistant message with metadata and stage1_5
             metadata = {
                 'label_to_model': label_to_model,
                 'aggregate_rankings': aggregate_rankings
+            }
+            stage1_5_data = {
+                'questions': questions_results,
+                'answers': answers_results,
+                'label_to_model': label_to_model_interrogation
             }
             storage.add_assistant_message(
                 conversation_id,
                 stage1_results,
                 stage2_results,
                 stage3_result,
-                metadata
+                metadata,
+                stage1_5_data
             )
 
             # Send completion event

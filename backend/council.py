@@ -32,6 +32,185 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
     return stage1_results
 
 
+async def stage1_5_cross_interrogation(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """
+    Stage 1.5 Part 1: Each model generates follow-up questions about other responses.
+
+    Args:
+        user_query: The original user query
+        stage1_results: Results from Stage 1
+
+    Returns:
+        Tuple of (questions list, label_to_model mapping)
+    """
+    # Create anonymized labels for responses (Response A, Response B, etc.)
+    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+
+    # Create mapping from label to model name
+    label_to_model = {
+        f"Response {label}": result['model']
+        for label, result in zip(labels, stage1_results)
+    }
+
+    # Build the interrogation prompt
+    responses_text = "\n\n".join([
+        f"Response {label}:\n{result['response']}"
+        for label, result in zip(labels, stage1_results)
+    ])
+
+    interrogation_prompt = f"""You are reviewing responses to the following question:
+
+Question: {user_query}
+
+Here are the responses from different models (anonymized):
+
+{responses_text}
+
+Your task:
+Generate 1-2 focused follow-up questions for OTHER responses (not your own). Your questions should:
+1. Clarify ambiguities or unmentioned aspects in their reasoning
+2. Probe deeper into assumptions they made
+3. Explore edge cases or alternative perspectives they didn't address
+4. Uncover hidden intentions in the original question
+
+Format your response as:
+QUESTIONS FOR Response [X]:
+1. [Your first question]
+2. [Your second question]
+
+QUESTIONS FOR Response [Y]:
+1. [Your first question]
+
+Be concise and specific. Each question should be a single sentence."""
+
+    messages = [{"role": "user", "content": interrogation_prompt}]
+
+    # Get questions from all council models in parallel
+    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+
+    # Format results
+    questions_results = []
+    for model, response in responses.items():
+        if response is not None:
+            questions_results.append({
+                "model": model,
+                "questions": response.get('content', '')
+            })
+
+    return questions_results, label_to_model
+
+
+async def stage1_5_collect_answers(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+    questions_results: List[Dict[str, Any]],
+    label_to_model: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """
+    Stage 1.5 Part 2: Each model answers questions directed at them.
+
+    Args:
+        user_query: The original user query
+        stage1_results: Results from Stage 1
+        questions_results: Questions from interrogation phase
+        label_to_model: Mapping from labels to model names
+
+    Returns:
+        List of answers with context
+    """
+    # Invert label_to_model to get model_to_label
+    model_to_label = {v: k for k, v in label_to_model.items()}
+
+    # Collect all questions directed at each model
+    questions_for_model = {result['model']: [] for result in stage1_results}
+
+    for question_entry in questions_results:
+        asker_model = question_entry['model']
+        questions_text = question_entry['questions']
+
+        # Parse questions by looking for "QUESTIONS FOR Response X:"
+        import re
+        pattern = r'QUESTIONS FOR (Response [A-Z]):\s*\n((?:\d+\..*(?:\n|$))+)'
+        matches = re.findall(pattern, questions_text, re.MULTILINE)
+
+        for label, questions_block in matches:
+            if label in label_to_model:
+                target_model = label_to_model[label]
+                # Extract individual questions
+                question_lines = re.findall(r'\d+\.\s*(.+)', questions_block)
+                for q in question_lines:
+                    questions_for_model[target_model].append({
+                        'from_model': asker_model,
+                        'question': q.strip()
+                    })
+
+    # Now have each model answer their questions
+    answers_results = []
+
+    for result in stage1_results:
+        model = result['model']
+        original_response = result['response']
+        questions = questions_for_model.get(model, [])
+
+        if not questions:
+            # No questions for this model
+            answers_results.append({
+                "model": model,
+                "original_response": original_response,
+                "questions": [],
+                "answers": "No questions were asked about this response."
+            })
+            continue
+
+        # Format questions for the prompt
+        questions_text = "\n".join([
+            f"{i+1}. {q['question']}"
+            for i, q in enumerate(questions)
+        ])
+
+        answer_prompt = f"""Original Question: {user_query}
+
+Your Original Response:
+{original_response}
+
+Peer reviewers have asked the following questions about your response:
+
+{questions_text}
+
+Please answer each question concisely. Defend your reasoning, elaborate where necessary, or acknowledge any overlooked aspects. Format your response as:
+
+ANSWER TO QUESTION 1:
+[Your answer]
+
+ANSWER TO QUESTION 2:
+[Your answer]
+
+Keep each answer brief (1-3 sentences)."""
+
+        messages = [{"role": "user", "content": answer_prompt}]
+        response = await query_model(model, messages)
+
+        if response is None:
+            answers_results.append({
+                "model": model,
+                "original_response": original_response,
+                "questions": questions,
+                "answers": "Failed to generate answers."
+            })
+        else:
+            answers_results.append({
+                "model": model,
+                "original_response": original_response,
+                "questions": questions,
+                "answers": response.get('content', '')
+            })
+
+    return answers_results
+
+
 async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]]

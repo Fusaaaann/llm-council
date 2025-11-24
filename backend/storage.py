@@ -132,10 +132,11 @@ def add_assistant_message(
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
     stage3: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    stage1_5: Optional[Dict[str, Any]] = None
 ):
     """
-    Add an assistant message with all 3 stages to a conversation.
+    Add an assistant message with all stages to a conversation.
 
     Args:
         conversation_id: Conversation identifier
@@ -143,6 +144,7 @@ def add_assistant_message(
         stage2: List of model rankings
         stage3: Final synthesized response
         metadata: Optional metadata (label_to_model, aggregate_rankings)
+        stage1_5: Optional interrogation round data (questions and answers)
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
@@ -154,6 +156,10 @@ def add_assistant_message(
         "stage2": stage2,
         "stage3": stage3
     }
+
+    # Add stage1_5 if provided
+    if stage1_5:
+        message["stage1_5"] = stage1_5
 
     # Add metadata if provided
     if metadata:
