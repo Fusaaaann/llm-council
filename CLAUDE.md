@@ -179,12 +179,13 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 
 - Configurable council/chairman via UI instead of config file
 - ~~Streaming responses instead of batch loading~~ **DONE** ✓
-- Export conversations to markdown/PDF
+- ~~Export conversations to markdown/PDF~~
 - Model performance analytics over time
 - Custom ranking criteria (not just accuracy/insight)
 - Support for reasoning models (o1, etc.) with special handling
-- Delete conversation functionality
-- Stop/cancel ongoing council deliberation
+- ~~Manual rename, Delete conversation functionality~~
+- ~~Stop/cancel ongoing council deliberation~~
+- navigate between user messages
 
 ## Testing Notes
 

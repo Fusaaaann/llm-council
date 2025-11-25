@@ -98,7 +98,8 @@ def list_conversations() -> List[Dict[str, Any]]:
                     "id": data["id"],
                     "created_at": data["created_at"],
                     "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
+                    "message_count": len(data["messages"]),
+                    "is_loading": data.get("is_loading", False)
                 })
 
     # Sort by creation time, newest first
@@ -184,3 +185,55 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+def set_conversation_loading(conversation_id: str, is_loading: bool):
+    """
+    Set the loading state for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        is_loading: Whether the conversation is currently loading
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["is_loading"] = is_loading
+    save_conversation(conversation)
+
+
+def get_conversation_loading(conversation_id: str) -> bool:
+    """
+    Get the loading state for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if conversation is loading, False otherwise
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        return False
+
+    return conversation.get("is_loading", False)
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    path = get_conversation_path(conversation_id)
+
+    if not os.path.exists(path):
+        return False
+
+    os.remove(path)
+    return True

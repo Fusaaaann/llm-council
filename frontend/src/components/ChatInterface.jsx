@@ -4,6 +4,7 @@ import Stage1 from './Stage1';
 import Stage1_5 from './Stage1_5';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import ModelConfig from './ModelConfig';
 import './ChatInterface.css';
 
 export default function ChatInterface({
@@ -12,8 +13,11 @@ export default function ChatInterface({
   isLoading,
   onEditMessage,
   onRetryMessage,
+  onCancelMessage,
+  onUpdateModels,
 }) {
   const [input, setInput] = useState('');
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -175,6 +179,14 @@ export default function ChatInterface({
       </div>
 
       <form className="input-form" onSubmit={handleSubmit}>
+        <button
+          type="button"
+          className="config-button"
+          onClick={() => setIsConfigOpen(true)}
+          title="Configure models"
+        >
+          ⚙️
+        </button>
         <textarea
           ref={inputRef}
           className="message-input"
@@ -185,14 +197,30 @@ export default function ChatInterface({
           disabled={isLoading}
           rows={3}
         />
-        <button
-          type="submit"
-          className="send-button"
-          disabled={!input.trim() || isLoading}
-        >
-          Send
-        </button>
+        {isLoading ? (
+          <button
+            type="button"
+            className="cancel-button"
+            onClick={onCancelMessage}
+          >
+            ⏹ Stop
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="send-button"
+            disabled={!input.trim()}
+          >
+            Send
+          </button>
+        )}
       </form>
+
+      <ModelConfig
+        isOpen={isConfigOpen}
+        onClose={() => setIsConfigOpen(false)}
+        onSave={onUpdateModels}
+      />
     </div>
   );
 }

@@ -9,10 +9,21 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingIntervalId, setLoadingIntervalId] = useState(null);
+  const [abortController, setAbortController] = useState(null);
 
   // Load conversations on mount
   useEffect(() => {
     loadConversations();
+  }, []);
+
+  // Poll for conversation loading states
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadConversations();
+    }, 1000); // Poll every second
+
+    return () => clearInterval(interval);
   }, []);
 
   // Load conversation details when selected
@@ -57,6 +68,62 @@ function App() {
     setCurrentConversationId(id);
   };
 
+  const handleRenameConversation = async (id, title) => {
+    try {
+      await api.renameConversation(id, title);
+      await loadConversations();
+      if (currentConversationId === id) {
+        await loadConversation(id);
+      }
+    } catch (error) {
+      console.error('Failed to rename conversation:', error);
+    }
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+      // If we deleted the current conversation, clear it
+      if (currentConversationId === id) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
+      await loadConversations();
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
+
+  const handleExportConversation = async (id, format) => {
+    try {
+      await api.exportConversation(id, format);
+    } catch (error) {
+      console.error('Failed to export conversation:', error);
+      alert('Export to PDF is not yet implemented. Please use Markdown export.');
+    }
+  };
+
+  const handleUpdateModels = async (councilModels, chairmanModel) => {
+    try {
+      const response = await fetch('http://localhost:8001/api/models', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          council_models: councilModels,
+          chairman_model: chairmanModel,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update models');
+      }
+    } catch (error) {
+      console.error('Failed to update models:', error);
+      throw error;
+    }
+  };
+
   const handleEditMessage = (content) => {
     // Remove the last user message and its response (if any)
     setCurrentConversation((prev) => {
@@ -89,8 +156,28 @@ function App() {
     await handleSendMessage(content, true);
   };
 
+  const handleCancelMessage = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+    setIsLoading(false);
+    // Remove the partial assistant response
+    setCurrentConversation((prev) => {
+      const messages = [...prev.messages];
+      if (messages[messages.length - 1]?.role === 'assistant') {
+        messages.pop();
+      }
+      return { ...prev, messages };
+    });
+  };
+
   const handleSendMessage = async (content, skipAddingUserMessage = false) => {
     if (!currentConversationId) return;
+
+    // Create abort controller for cancellation
+    const controller = new AbortController();
+    setAbortController(controller);
 
     setIsLoading(true);
     try {
@@ -126,7 +213,7 @@ function App() {
       }));
 
       // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
+      await api.sendMessageStream(currentConversationId, content, controller.signal, (eventType, event) => {
         switch (eventType) {
           case 'stage1_start':
             setCurrentConversation((prev) => {
@@ -232,11 +319,13 @@ function App() {
             // Stream complete, reload conversations list
             loadConversations();
             setIsLoading(false);
+            setAbortController(null);
             break;
 
           case 'error':
             console.error('Stream error:', event.message);
             setIsLoading(false);
+            setAbortController(null);
             break;
 
           default:
@@ -244,13 +333,19 @@ function App() {
         }
       });
     } catch (error) {
-      console.error('Failed to send message:', error);
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -2),
-      }));
+      // Check if it was aborted
+      if (error.name === 'AbortError') {
+        console.log('Message sending cancelled');
+      } else {
+        console.error('Failed to send message:', error);
+        // Remove optimistic messages on error
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: prev.messages.slice(0, -2),
+        }));
+      }
       setIsLoading(false);
+      setAbortController(null);
     }
   };
 
@@ -261,12 +356,17 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onRenameConversation={handleRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onExportConversation={handleExportConversation}
       />
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         onEditMessage={handleEditMessage}
         onRetryMessage={handleRetryMessage}
+        onCancelMessage={handleCancelMessage}
+        onUpdateModels={handleUpdateModels}
         isLoading={isLoading}
       />
     </div>
