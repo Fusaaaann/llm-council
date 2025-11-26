@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import AuthModal from './components/AuthModal';
 import { api } from './api';
+import { isAuthenticated, getCurrentUser, setAuth, clearAuth } from './auth';
 import './App.css';
 
 function App() {
@@ -11,6 +13,28 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingIntervalId, setLoadingIntervalId] = useState(null);
   const [abortController, setAbortController] = useState(null);
+  const [user, setUser] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [inviteToken, setInviteToken] = useState(null);
+
+  // Check for invite token in URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get('invite');
+    if (invite) {
+      setInviteToken(invite);
+      setShowAuthModal(true);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Initialize authentication state
+  useEffect(() => {
+    if (isAuthenticated()) {
+      setUser(getCurrentUser());
+    }
+  }, []);
 
   // Load conversations on mount
   useEffect(() => {
@@ -101,6 +125,73 @@ function App() {
       console.error('Failed to export conversation:', error);
       alert('Export to PDF is not yet implemented. Please use Markdown export.');
     }
+  };
+
+  const handlePublishConversation = async (id) => {
+    try {
+      await api.publishConversation(id);
+      await loadConversations();
+      if (currentConversationId === id) {
+        await loadConversation(id);
+      }
+    } catch (error) {
+      console.error('Failed to publish conversation:', error);
+      alert('Failed to publish conversation. Please try again.');
+    }
+  };
+
+  const handleUnpublishConversation = async (id) => {
+    try {
+      await api.unpublishConversation(id);
+      await loadConversations();
+      if (currentConversationId === id) {
+        await loadConversation(id);
+      }
+    } catch (error) {
+      console.error('Failed to unpublish conversation:', error);
+      alert('Failed to unpublish conversation. Please try again.');
+    }
+  };
+
+  const handleAuth = async (mode, credentials) => {
+    try {
+      let result;
+      if (mode === 'register') {
+        result = await api.register(
+          credentials.email,
+          credentials.password,
+          credentials.name,
+          credentials.invite_token
+        );
+      } else {
+        result = await api.login(credentials.email, credentials.password);
+      }
+
+      // Store auth data
+      setAuth(result.access_token, result.refresh_token, result.user);
+      setUser(result.user);
+      setShowAuthModal(false);
+      setInviteToken(null); // Clear invite token after use
+
+      // Reload conversations for the authenticated user
+      await loadConversations();
+    } catch (error) {
+      throw error; // Re-throw to be handled by AuthModal
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+
+    clearAuth();
+    setUser(null);
+    setConversations([]);
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   const handleUpdateModels = async (councilModels, chairmanModel) => {
@@ -359,6 +450,11 @@ function App() {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onExportConversation={handleExportConversation}
+        onPublishConversation={handlePublishConversation}
+        onUnpublishConversation={handleUnpublishConversation}
+        user={user}
+        onLogin={() => setShowAuthModal(true)}
+        onLogout={handleLogout}
       />
       <ChatInterface
         conversation={currentConversation}
@@ -368,6 +464,12 @@ function App() {
         onCancelMessage={handleCancelMessage}
         onUpdateModels={handleUpdateModels}
         isLoading={isLoading}
+      />
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={handleAuth}
+        inviteToken={inviteToken}
       />
     </div>
   );

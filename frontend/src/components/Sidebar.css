@@ -18,6 +18,63 @@
   color: #333;
 }
 
+/* Auth section */
+.auth-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f9f9f9;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.user-name {
+  font-weight: 500;
+  color: #333;
+  font-size: 14px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logout-btn {
+  padding: 6px 12px;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 10px;
+  background: #4a90e2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.login-btn:hover {
+  background: #357abd;
+}
+
 .new-conversation-btn {
   width: 100%;
   padding: 10px;
@@ -220,4 +277,24 @@
   100% {
     stroke-dashoffset: 50;
   }
+}
+
+.sync-status-icon {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.public-badge,
+.byok-badge {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.conversation-menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conversation-menu button:disabled:hover {
+  background: none;
 }

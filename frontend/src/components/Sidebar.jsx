@@ -9,6 +9,11 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onExportConversation,
+  onPublishConversation,
+  onUnpublishConversation,
+  user,
+  onLogin,
+  onLogout,
 }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -56,6 +61,36 @@ export default function Sidebar({
     setOpenMenuId(null);
   };
 
+  const handlePublish = (conv, e) => {
+    e.stopPropagation();
+    if (conv.uses_byok) {
+      alert('Cannot publish conversations that use your own API key (BYOK)');
+      return;
+    }
+    onPublishConversation(conv.id);
+    setOpenMenuId(null);
+  };
+
+  const handleUnpublish = (convId, e) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to unpublish this conversation from the forum?')) {
+      onUnpublishConversation(convId);
+    }
+    setOpenMenuId(null);
+  };
+
+  const getSyncStatusIcon = (syncStatus) => {
+    switch (syncStatus) {
+      case 'synced':
+        return '☁️'; // Cloud synced
+      case 'syncing':
+        return '⏳'; // Syncing
+      case 'local':
+      default:
+        return '💾'; // Local only
+    }
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -63,6 +98,22 @@ export default function Sidebar({
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
         </button>
+      </div>
+
+      {/* Auth section */}
+      <div className="auth-section">
+        {user ? (
+          <div className="user-info">
+            <span className="user-name">{user.name}</span>
+            <button className="logout-btn" onClick={onLogout}>
+              Logout
+            </button>
+          </div>
+        ) : (
+          <button className="login-btn" onClick={onLogin}>
+            Login / Register
+          </button>
+        )}
       </div>
 
       <div className="conversation-list">
@@ -98,6 +149,11 @@ export default function Sidebar({
                   <>
                     <div className="conversation-info">
                       <div className="conversation-title">
+                        <span className="sync-status-icon" title={`Status: ${conv.sync_status || 'local'}`}>
+                          {getSyncStatusIcon(conv.sync_status)}
+                        </span>
+                        {conv.is_public && <span className="public-badge" title="Public conversation">🌐</span>}
+                        {conv.uses_byok && <span className="byok-badge" title="Uses your API key">🔑</span>}
                         {conv.title || 'New Conversation'}
                         {conv.is_loading && (
                           <span className="loading-indicator">
@@ -122,6 +178,15 @@ export default function Sidebar({
                         <button onClick={(e) => handleRename(conv, e)}>
                           ✏️ Rename
                         </button>
+                        {conv.is_public ? (
+                          <button onClick={(e) => handleUnpublish(conv.id, e)}>
+                            🔒 Make Private
+                          </button>
+                        ) : (
+                          <button onClick={(e) => handlePublish(conv, e)} disabled={conv.uses_byok}>
+                            🌐 Publish to Forum
+                          </button>
+                        )}
                         <button onClick={(e) => handleExport(conv.id, 'markdown', e)}>
                           📄 Export to Markdown
                         </button>

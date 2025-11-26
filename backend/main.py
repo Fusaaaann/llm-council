@@ -1,19 +1,46 @@
 """FastAPI backend for LLM Council."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 import json
 import asyncio
+import sys
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
+from . import config  # keep on top of other local modules
 from . import storage
-from . import config
+from . import auth
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage1_5_cross_interrogation, stage1_5_collect_answers, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .auth_middleware import get_current_user_optional, get_current_user_required, get_profile_id_for_request
+from .startup_validation import run_startup_validation, SecurityValidationError
+from .security_middleware import SecurityHeadersMiddleware
+from . import audit
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title="LLM Council API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Run startup validation
+@app.on_event("startup")
+async def startup_event():
+    """Run security validation on startup."""
+    try:
+        run_startup_validation()
+    except SecurityValidationError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
 # Enable CORS for local development
 app.add_middleware(
@@ -27,7 +54,7 @@ app.add_middleware(
 
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
-    pass
+    uses_byok: bool = False
 
 
 class SendMessageRequest(BaseModel):
@@ -46,6 +73,43 @@ class ModelConfigRequest(BaseModel):
     chairman_model: str
 
 
+class CreateProfileRequest(BaseModel):
+    """Request to create a new profile."""
+    name: str
+    settings: Optional[Dict[str, Any]] = None
+
+
+class UpdateProfileRequest(BaseModel):
+    """Request to update a profile."""
+    name: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+
+
+class RegisterRequest(BaseModel):
+    """Request to register a new user."""
+    email: str
+    password: str
+    name: str
+    invite_token: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    """Request to log in."""
+    email: str
+    password: str
+
+
+class RefreshTokenRequest(BaseModel):
+    """Request to refresh access token."""
+    refresh_token: str
+
+
+class WaitlistRequest(BaseModel):
+    """Request to join the waitlist."""
+    email: str
+    name: Optional[str] = None
+
+
 class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
     id: str
@@ -53,14 +117,22 @@ class ConversationMetadata(BaseModel):
     title: str
     message_count: int
     is_loading: bool = False
+    is_public: bool = False
+    sync_status: str = "local"
+    uses_byok: bool = False
 
 
 class Conversation(BaseModel):
     """Full conversation with all messages."""
     id: str
+    profile_id: str
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+    is_public: bool = False
+    published_at: Optional[str] = None
+    sync_status: str = "local"
+    uses_byok: bool = False
 
 
 @app.get("/")
@@ -87,43 +159,68 @@ async def update_models(request: ModelConfigRequest):
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
-async def list_conversations():
-    """List all conversations (metadata only)."""
-    return storage.list_conversations()
+async def list_conversations(
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """List all conversations for a profile (metadata only)."""
+    pid = get_profile_id_for_request(user, profile_id)
+    return storage.list_conversations(pid)
 
 
 @app.post("/api/conversations", response_model=Conversation)
-async def create_conversation(request: CreateConversationRequest):
+async def create_conversation(
+    request: CreateConversationRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """Create a new conversation."""
+    pid = get_profile_id_for_request(user, profile_id)
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
+    conversation = storage.create_conversation(conversation_id, pid, request.uses_byok)
     return conversation
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: str):
+async def get_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """Get a specific conversation with all its messages."""
-    conversation = storage.get_conversation(conversation_id)
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
 @app.patch("/api/conversations/{conversation_id}/rename")
-async def rename_conversation(conversation_id: str, request: RenameConversationRequest):
+async def rename_conversation(
+    conversation_id: str,
+    request: RenameConversationRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """Rename a conversation."""
-    conversation = storage.get_conversation(conversation_id)
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    storage.update_conversation_title(conversation_id, request.title)
+    storage.update_conversation_title(conversation_id, request.title, pid)
     return {"success": True}
 
 
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
+async def delete_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """Delete a conversation."""
-    success = storage.delete_conversation(conversation_id)
+    pid = get_profile_id_for_request(user, profile_id)
+    success = storage.delete_conversation(conversation_id, pid)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"success": True}
@@ -189,9 +286,14 @@ def conversation_to_markdown(conversation: Dict[str, Any]) -> str:
 
 
 @app.get("/api/conversations/{conversation_id}/export/markdown")
-async def export_markdown(conversation_id: str):
+async def export_markdown(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """Export conversation as markdown."""
-    conversation = storage.get_conversation(conversation_id)
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -206,14 +308,21 @@ async def export_markdown(conversation_id: str):
 
 
 @app.post("/api/conversations/{conversation_id}/message")
-async def send_message(conversation_id: str, request: SendMessageRequest):
+async def send_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """
     Send a message and run the 3-stage council process.
     Returns the complete response with all stages.
     Now uses same stage logic as streaming endpoint.
     """
+    pid = get_profile_id_for_request(user, profile_id)
+
     # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id)
+    conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -222,10 +331,10 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     try:
         # Set loading state
-        storage.set_conversation_loading(conversation_id, True)
+        storage.set_conversation_loading(conversation_id, True, pid)
 
         # Add user message
-        storage.add_user_message(conversation_id, request.content)
+        storage.add_user_message(conversation_id, request.content, pid)
 
         # Generate title in parallel if first message
         title_task = None
@@ -251,7 +360,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         # Wait for title if it was started
         if title_task:
             title = await title_task
-            storage.update_conversation_title(conversation_id, title)
+            storage.update_conversation_title(conversation_id, title, pid)
 
         # Build metadata and stage1_5 data
         metadata = {
@@ -271,11 +380,12 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
             stage2_results,
             stage3_result,
             metadata,
-            stage1_5_data
+            stage1_5_data,
+            pid
         )
 
         # Clear loading state
-        storage.set_conversation_loading(conversation_id, False)
+        storage.set_conversation_loading(conversation_id, False, pid)
 
         # Return the complete response with metadata
         return {
@@ -287,18 +397,27 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         }
     except Exception as e:
         # Clear loading state on error
-        storage.set_conversation_loading(conversation_id, False)
+        storage.set_conversation_loading(conversation_id, False, pid)
         raise
 
 
 @app.post("/api/conversations/{conversation_id}/message/stream")
-async def send_message_stream(conversation_id: str, request: SendMessageRequest):
+@limiter.limit("10/minute")
+async def send_message_stream(
+    http_request: Request,
+    conversation_id: str,
+    request: SendMessageRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """
     Send a message and stream the 3-stage council process.
     Returns Server-Sent Events as each stage completes.
     """
+    pid = get_profile_id_for_request(user, profile_id)
+
     # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id)
+    conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -308,10 +427,10 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     async def event_generator():
         try:
             # Set loading state to true
-            storage.set_conversation_loading(conversation_id, True)
+            storage.set_conversation_loading(conversation_id, True, pid)
 
             # Add user message
-            storage.add_user_message(conversation_id, request.content)
+            storage.add_user_message(conversation_id, request.content, pid)
 
             # Start title generation in parallel (don't await yet)
             title_task = None
@@ -347,7 +466,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Wait for title generation if it was started
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                storage.update_conversation_title(conversation_id, title, pid)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             # Save complete assistant message with metadata and stage1_5
@@ -366,18 +485,19 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage2_results,
                 stage3_result,
                 metadata,
-                stage1_5_data
+                stage1_5_data,
+                pid
             )
 
             # Set loading state to false
-            storage.set_conversation_loading(conversation_id, False)
+            storage.set_conversation_loading(conversation_id, False, pid)
 
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
         except Exception as e:
             # Set loading state to false on error
-            storage.set_conversation_loading(conversation_id, False)
+            storage.set_conversation_loading(conversation_id, False, pid)
 
             # Send error event
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -390,6 +510,347 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+# Profile management endpoints
+
+@app.get("/api/profiles")
+async def list_profiles():
+    """List all profiles."""
+    return storage.list_profiles()
+
+
+@app.get("/api/profiles/{profile_id}")
+async def get_profile(profile_id: str):
+    """Get a specific profile."""
+    profile = storage.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
+@app.post("/api/profiles")
+async def create_profile(request: CreateProfileRequest):
+    """Create a new profile."""
+    profile_id = str(uuid.uuid4())
+    try:
+        profile = storage.create_profile(profile_id, request.name, request.settings)
+        return profile
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/api/profiles/{profile_id}")
+async def update_profile(profile_id: str, request: UpdateProfileRequest):
+    """Update a profile."""
+    try:
+        profile = storage.update_profile(profile_id, request.name, request.settings)
+        return profile
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/profiles/{profile_id}")
+async def delete_profile(profile_id: str):
+    """Delete a profile."""
+    try:
+        success = storage.delete_profile(profile_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return {"success": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Publish/unpublish endpoints
+
+@app.post("/api/conversations/{conversation_id}/publish")
+async def publish_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Publish a conversation to the forum."""
+    pid = get_profile_id_for_request(user, profile_id)
+    try:
+        conversation = storage.publish_conversation(conversation_id, pid)
+        return conversation
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/conversations/{conversation_id}/unpublish")
+async def unpublish_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Unpublish a conversation from the forum."""
+    pid = get_profile_id_for_request(user, profile_id)
+    try:
+        conversation = storage.unpublish_conversation(conversation_id, pid)
+        return conversation
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/conversations/{conversation_id}/encryption-status")
+async def get_encryption_status(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Get the encryption status of a conversation."""
+    pid = get_profile_id_for_request(user, profile_id)
+    try:
+        status = storage.get_conversation_encryption_status(conversation_id, pid)
+        return status
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/conversations/{conversation_id}/encrypt")
+async def encrypt_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Encrypt a conversation's messages."""
+    pid = get_profile_id_for_request(user, profile_id)
+    try:
+        conversation = storage.encrypt_conversation(conversation_id, pid)
+        return {
+            "success": True,
+            "message": "Conversation encrypted",
+            "status": storage.get_conversation_encryption_status(conversation_id, pid)
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/conversations/{conversation_id}/decrypt")
+async def decrypt_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Decrypt a conversation's messages (save as plaintext)."""
+    pid = get_profile_id_for_request(user, profile_id)
+    try:
+        conversation = storage.decrypt_conversation(conversation_id, pid)
+        return {
+            "success": True,
+            "message": "Conversation decrypted",
+            "status": storage.get_conversation_encryption_status(conversation_id, pid)
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Forum endpoints
+
+@app.get("/api/forum/conversations")
+async def list_forum_conversations():
+    """List all public conversations in the forum."""
+    return storage.list_public_conversations()
+
+
+@app.get("/api/forum/conversations/{conversation_id}")
+async def get_forum_conversation(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Get a specific public conversation from the forum.
+    Profile ID is needed to locate the conversation.
+    """
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if not conversation.get("is_public", False):
+        raise HTTPException(status_code=403, detail="Conversation is not public")
+
+    return conversation
+
+
+# Authentication endpoints
+
+@app.post("/api/auth/register")
+@limiter.limit("3/hour")
+async def register(request: RegisterRequest, http_request: Request):
+    """Register a new user account (requires invite token in production)."""
+    client_ip = http_request.client.host if http_request.client else None
+    user_agent = http_request.headers.get("user-agent")
+
+    try:
+        # In production mode, require invite token
+        if config.ENVIRONMENT == "production" and not request.invite_token:
+            audit.log_register_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="missing_invite_token")
+            raise HTTPException(status_code=400, detail="Invite token required for registration")
+
+        user = auth.create_user(request.email, request.password, request.name, request.invite_token)
+
+        # Create tokens
+        access_token = auth.create_access_token(user["id"], user["default_profile_id"])
+        refresh_token_data = auth.create_refresh_token_record(user["id"], user["default_profile_id"])
+
+        audit.log_register_success(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent, invited=bool(request.invite_token))
+
+        return {
+            "user": auth.get_safe_user_data(user),
+            "access_token": access_token,
+            "refresh_token": refresh_token_data["token"],
+            "token_type": "bearer"
+        }
+    except ValueError as e:
+        audit.log_register_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/auth/login")
+@limiter.limit("5/15minutes")
+async def login(request: LoginRequest, http_request: Request):
+    """Authenticate and log in a user."""
+    client_ip = http_request.client.host if http_request.client else None
+    user_agent = http_request.headers.get("user-agent")
+
+    user = auth.authenticate_user(request.email, request.password)
+
+    # Check if account is locked
+    if user and user.get("_locked"):
+        audit.log_login_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="account_locked")
+        locked_until = user.get("locked_until", "unknown")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Account temporarily locked due to too many failed login attempts. Please try again later. Locked until: {locked_until}"
+        )
+
+    if not user:
+        audit.log_login_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="invalid_credentials")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Create tokens
+    access_token = auth.create_access_token(user["id"], user["default_profile_id"])
+    refresh_token_data = auth.create_refresh_token_record(user["id"], user["default_profile_id"])
+
+    audit.log_login_success(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent)
+
+    return {
+        "user": auth.get_safe_user_data(user),
+        "access_token": access_token,
+        "refresh_token": refresh_token_data["token"],
+        "token_type": "bearer"
+    }
+
+
+@app.post("/api/auth/refresh")
+@limiter.limit("20/minute")
+async def refresh_token(request: RefreshTokenRequest, http_request: Request):
+    """Refresh an access token and rotate refresh token for enhanced security."""
+    client_ip = http_request.client.host if http_request.client else None
+    user_agent = http_request.headers.get("user-agent")
+
+    session = auth.verify_refresh_token(request.refresh_token)
+
+    if not session:
+        audit.log_token_refresh_failure(ip_address=client_ip, user_agent=user_agent, reason="invalid_token")
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    user = auth.get_user_by_id(session["user_id"])
+    if not user:
+        audit.log_token_refresh_failure(ip_address=client_ip, user_agent=user_agent, reason="user_not_found")
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # Revoke old refresh token immediately (token rotation)
+    auth.revoke_refresh_token(request.refresh_token)
+
+    # Create new access token AND new refresh token
+    access_token = auth.create_access_token(user["id"], user["default_profile_id"])
+    new_refresh_token_data = auth.create_refresh_token_record(user["id"], user["default_profile_id"])
+
+    audit.log_token_refresh(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token_data["token"],  # Return new refresh token
+        "token_type": "bearer"
+    }
+
+
+@app.post("/api/auth/logout")
+async def logout(request: RefreshTokenRequest, http_request: Request):
+    """Log out by revoking a refresh token."""
+    client_ip = http_request.client.host if http_request.client else None
+    user_agent = http_request.headers.get("user-agent")
+
+    # Try to get user info from session before revoking
+    session = auth.verify_refresh_token(request.refresh_token)
+    if session:
+        user = auth.get_user_by_id(session["user_id"])
+        if user:
+            audit.log_logout(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent)
+
+    auth.revoke_refresh_token(request.refresh_token)
+    return {"success": True}
+
+
+@app.get("/api/auth/me")
+async def get_current_user(user: Dict[str, Any] = Depends(get_current_user_required)):
+    """Get current authenticated user."""
+    return {"user": user}
+
+
+# Waitlist endpoints
+
+@app.post("/api/waitlist")
+@limiter.limit("1/hour")
+async def join_waitlist(request: Request, waitlist_data: WaitlistRequest):
+    """Join the waitlist for account registration."""
+    client_ip = request.client.host if request.client else None
+
+    try:
+        entry = storage.add_to_waitlist(waitlist_data.email, waitlist_data.name)
+
+        audit.log_waitlist_submission(waitlist_data.email, ip_address=client_ip)
+
+        # TODO: Send notification email to admin
+        # This would be implemented with an email service
+
+        return {
+            "success": True,
+            "message": "Successfully joined waitlist",
+            "email": entry["email"]
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/invite/validate/{token}")
+async def validate_invite(token: str, http_request: Request):
+    """Validate an invite token."""
+    client_ip = http_request.client.host if http_request.client else None
+
+    is_valid, error = storage.validate_invite_token(token)
+
+    invite = storage.get_invite_token(token) if is_valid else None
+    audit.log_invite_validation(
+        token,
+        "success" if is_valid else "failure",
+        email=invite.get("email") if invite else None,
+        ip_address=client_ip
+    )
+
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
+
+    return {
+        "valid": True,
+        "email": invite.get("email"),
+        "expires_at": invite.get("expires_at")
+    }
 
 
 if __name__ == "__main__":

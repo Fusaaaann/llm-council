@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import './ModelConfig.css';
+import EncryptionControls from './EncryptionControls';
 
-export default function ModelConfig({ isOpen, onClose, onSave }) {
+export default function ModelConfig({ isOpen, onClose, onSave, currentConversationId }) {
   const [councilModels, setCouncilModels] = useState([]);
   const [chairmanModel, setChairmanModel] = useState('');
   const [newModel, setNewModel] = useState('');
+  const [showEncryption, setShowEncryption] = useState(false); // Hidden by default
 
   useEffect(() => {
     if (isOpen) {
@@ -129,6 +131,16 @@ export default function ModelConfig({ isOpen, onClose, onSave }) {
               className="model-input"
             />
           </div>
+
+          {/* Hidden encryption controls - set showEncryption to true to enable */}
+          {showEncryption && (
+            <div className="config-section">
+              <EncryptionControls
+                conversationId={currentConversationId}
+                isVisible={true}
+              />
+            </div>
+          )}
         </div>
 
         <div className="modal-footer">

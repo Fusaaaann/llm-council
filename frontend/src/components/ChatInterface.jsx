@@ -220,6 +220,7 @@ export default function ChatInterface({
         isOpen={isConfigOpen}
         onClose={() => setIsConfigOpen(false)}
         onSave={onUpdateModels}
+        currentConversationId={conversation?.id}
       />
     </div>
   );
