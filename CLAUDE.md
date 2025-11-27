@@ -437,10 +437,34 @@ This strict format allows reliable parsing while still getting thoughtful evalua
 ### Relative Imports
 All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
 
-### Port Configuration
+### Port Configuration & Deployment
 - Backend: 8001 (changed from 8000 to avoid conflict)
 - Frontend: 5173 (Vite default)
-- Update both `backend/main.py` and `frontend/src/api.js` if changing
+
+**Environment Variables for Deployment:**
+
+**Frontend:**
+- `VITE_API_BASE_URL`: Backend API URL (default: `http://localhost:8003`)
+  - Set in `.env` file or build environment
+  - Example production: `VITE_API_BASE_URL=https://api.yourdomain.com`
+
+**Backend:**
+- `FRONTEND_URLS`: Comma-separated list of allowed frontend origins for CORS
+  - Default: `http://localhost:5173,http://localhost:3000`
+  - Example production: `FRONTEND_URLS=https://yourdomain.com,https://www.yourdomain.com`
+  - Must include all frontend domains that will access the API
+
+**Deployment Steps:**
+1. **Frontend**:
+   - Create `.env` file with `VITE_API_BASE_URL=<your-backend-url>`
+   - Run `npm run build` - Vite will embed the variable in the build
+   - Deploy `dist/` directory to your hosting service
+
+2. **Backend**:
+   - Set `FRONTEND_URLS` environment variable with your frontend domain(s)
+   - Set `ENVIRONMENT=production` for production mode
+   - Ensure all security variables are set (JWT_SECRET_KEY, ENCRYPTION_KEY, etc.)
+   - Run with `python -m backend.main` or via process manager (systemd, pm2, etc.)
 
 ### Markdown Rendering
 All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
@@ -451,12 +475,13 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 ## Common Gotchas
 
 1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
-2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
-3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Metadata Persistence**: ~~Metadata is ephemeral (not persisted)~~ **FIXED** - Metadata now persisted in storage.py
-5. **Streaming Connection**: EventSource connections can timeout; frontend handles reconnection via error events
-6. **Encryption Key Loss**: Lost `ENCRYPTION_KEY` = permanently lost conversations. ALWAYS back up `.env` file
-7. **Missing cryptography Package**: Encryption requires `cryptography` library - install via `pip install cryptography`
+2. **CORS Issues**: Frontend must match allowed origins - configure via `FRONTEND_URLS` environment variable
+3. **API URL Configuration**: Frontend needs `VITE_API_BASE_URL` set before build for production deployment
+4. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
+5. **Metadata Persistence**: ~~Metadata is ephemeral (not persisted)~~ **FIXED** - Metadata now persisted in storage.py
+6. **Streaming Connection**: EventSource connections can timeout; frontend handles reconnection via error events
+7. **Encryption Key Loss**: Lost `ENCRYPTION_KEY` = permanently lost conversations. ALWAYS back up `.env` file
+8. **Missing cryptography Package**: Encryption requires `cryptography` library - install via `pip install cryptography`
 
 ## Recent Updates (Latest Session)
 

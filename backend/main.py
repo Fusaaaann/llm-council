@@ -42,10 +42,10 @@ async def startup_event():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-# Enable CORS for local development
+# Enable CORS - configurable via FRONTEND_URLS environment variable
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=config.FRONTEND_URLS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -151,10 +151,10 @@ async def get_models():
 
 
 @app.post("/api/models")
-async def update_models(request: ModelConfigRequest):
+async def update_models(req: ModelConfigRequest):
     """Update model configuration for the session."""
-    config.COUNCIL_MODELS = request.council_models
-    config.CHAIRMAN_MODEL = request.chairman_model
+    config.COUNCIL_MODELS = req.council_models
+    config.CHAIRMAN_MODEL = req.chairman_model
     return {"success": True}
 
 
@@ -170,14 +170,14 @@ async def list_conversations(
 
 @app.post("/api/conversations", response_model=Conversation)
 async def create_conversation(
-    request: CreateConversationRequest,
+    req: CreateConversationRequest,
     profile_id: Optional[str] = Query(None),
     user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
     """Create a new conversation."""
     pid = get_profile_id_for_request(user, profile_id)
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id, pid, request.uses_byok)
+    conversation = storage.create_conversation(conversation_id, pid, req.uses_byok)
     return conversation
 
 
@@ -198,7 +198,7 @@ async def get_conversation(
 @app.patch("/api/conversations/{conversation_id}/rename")
 async def rename_conversation(
     conversation_id: str,
-    request: RenameConversationRequest,
+    req: RenameConversationRequest,
     profile_id: Optional[str] = Query(None),
     user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
@@ -208,7 +208,7 @@ async def rename_conversation(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    storage.update_conversation_title(conversation_id, request.title, pid)
+    storage.update_conversation_title(conversation_id, req.title, pid)
     return {"success": True}
 
 
@@ -310,7 +310,7 @@ async def export_markdown(
 @app.post("/api/conversations/{conversation_id}/message")
 async def send_message(
     conversation_id: str,
-    request: SendMessageRequest,
+    req: SendMessageRequest,
     profile_id: Optional[str] = Query(None),
     user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
@@ -334,28 +334,28 @@ async def send_message(
         storage.set_conversation_loading(conversation_id, True, pid)
 
         # Add user message
-        storage.add_user_message(conversation_id, request.content, pid)
+        storage.add_user_message(conversation_id, req.content, pid)
 
         # Generate title in parallel if first message
         title_task = None
         if is_first_message:
-            title_task = asyncio.create_task(generate_conversation_title(request.content))
+            title_task = asyncio.create_task(generate_conversation_title(req.content))
 
         # Stage 1: Collect responses
-        stage1_results = await stage1_collect_responses(request.content)
+        stage1_results = await stage1_collect_responses(req.content)
 
         # Stage 1.5: Cross-interrogation (questions)
-        questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(request.content, stage1_results)
+        questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
 
         # Stage 1.5: Collect answers
-        answers_results = await stage1_5_collect_answers(request.content, stage1_results, questions_results, label_to_model_interrogation)
+        answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
 
         # Stage 2: Collect rankings
-        stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
+        stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
         aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
 
         # Stage 3: Synthesize final answer
-        stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results)
+        stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
 
         # Wait for title if it was started
         if title_task:
@@ -404,9 +404,9 @@ async def send_message(
 @app.post("/api/conversations/{conversation_id}/message/stream")
 @limiter.limit("10/minute")
 async def send_message_stream(
-    http_request: Request,
+    request: Request,
     conversation_id: str,
-    request: SendMessageRequest,
+    req: SendMessageRequest,
     profile_id: Optional[str] = Query(None),
     user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
@@ -430,37 +430,37 @@ async def send_message_stream(
             storage.set_conversation_loading(conversation_id, True, pid)
 
             # Add user message
-            storage.add_user_message(conversation_id, request.content, pid)
+            storage.add_user_message(conversation_id, req.content, pid)
 
             # Start title generation in parallel (don't await yet)
             title_task = None
             if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(request.content))
+                title_task = asyncio.create_task(generate_conversation_title(req.content))
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content)
+            stage1_results = await stage1_collect_responses(req.content)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 1.5: Cross-interrogation (questions)
             yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
-            questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(request.content, stage1_results)
+            questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
             yield f"data: {json.dumps({'type': 'stage1_5_questions_complete', 'data': questions_results})}\n\n"
 
             # Stage 1.5: Collect answers
             yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
-            answers_results = await stage1_5_collect_answers(request.content, stage1_results, questions_results, label_to_model_interrogation)
+            answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
             yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
+            stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results)
+            stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -530,21 +530,21 @@ async def get_profile(profile_id: str):
 
 
 @app.post("/api/profiles")
-async def create_profile(request: CreateProfileRequest):
+async def create_profile(req: CreateProfileRequest):
     """Create a new profile."""
     profile_id = str(uuid.uuid4())
     try:
-        profile = storage.create_profile(profile_id, request.name, request.settings)
+        profile = storage.create_profile(profile_id, req.name, req.settings)
         return profile
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.patch("/api/profiles/{profile_id}")
-async def update_profile(profile_id: str, request: UpdateProfileRequest):
+async def update_profile(profile_id: str, req: UpdateProfileRequest):
     """Update a profile."""
     try:
-        profile = storage.update_profile(profile_id, request.name, request.settings)
+        profile = storage.update_profile(profile_id, req.name, req.settings)
         return profile
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -680,24 +680,24 @@ async def get_forum_conversation(
 
 @app.post("/api/auth/register")
 @limiter.limit("3/hour")
-async def register(request: RegisterRequest, http_request: Request):
+async def register(req: RegisterRequest, request: Request):
     """Register a new user account (requires invite token in production)."""
-    client_ip = http_request.client.host if http_request.client else None
-    user_agent = http_request.headers.get("user-agent")
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
     try:
         # In production mode, require invite token
-        if config.ENVIRONMENT == "production" and not request.invite_token:
-            audit.log_register_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="missing_invite_token")
+        if config.ENVIRONMENT == "production" and not req.invite_token:
+            audit.log_register_failure(req.email, ip_address=client_ip, user_agent=user_agent, reason="missing_invite_token")
             raise HTTPException(status_code=400, detail="Invite token required for registration")
 
-        user = auth.create_user(request.email, request.password, request.name, request.invite_token)
+        user = auth.create_user(req.email, req.password, req.name, req.invite_token)
 
         # Create tokens
         access_token = auth.create_access_token(user["id"], user["default_profile_id"])
         refresh_token_data = auth.create_refresh_token_record(user["id"], user["default_profile_id"])
 
-        audit.log_register_success(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent, invited=bool(request.invite_token))
+        audit.log_register_success(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent, invited=bool(req.invite_token))
 
         return {
             "user": auth.get_safe_user_data(user),
@@ -706,22 +706,22 @@ async def register(request: RegisterRequest, http_request: Request):
             "token_type": "bearer"
         }
     except ValueError as e:
-        audit.log_register_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason=str(e))
+        audit.log_register_failure(req.email, ip_address=client_ip, user_agent=user_agent, reason=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/auth/login")
 @limiter.limit("5/15minutes")
-async def login(request: LoginRequest, http_request: Request):
+async def login(req: LoginRequest, request: Request):
     """Authenticate and log in a user."""
-    client_ip = http_request.client.host if http_request.client else None
-    user_agent = http_request.headers.get("user-agent")
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
-    user = auth.authenticate_user(request.email, request.password)
+    user = auth.authenticate_user(req.email, req.password)
 
     # Check if account is locked
     if user and user.get("_locked"):
-        audit.log_login_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="account_locked")
+        audit.log_login_failure(req.email, ip_address=client_ip, user_agent=user_agent, reason="account_locked")
         locked_until = user.get("locked_until", "unknown")
         raise HTTPException(
             status_code=403,
@@ -729,7 +729,7 @@ async def login(request: LoginRequest, http_request: Request):
         )
 
     if not user:
-        audit.log_login_failure(request.email, ip_address=client_ip, user_agent=user_agent, reason="invalid_credentials")
+        audit.log_login_failure(req.email, ip_address=client_ip, user_agent=user_agent, reason="invalid_credentials")
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     # Create tokens
@@ -748,12 +748,12 @@ async def login(request: LoginRequest, http_request: Request):
 
 @app.post("/api/auth/refresh")
 @limiter.limit("20/minute")
-async def refresh_token(request: RefreshTokenRequest, http_request: Request):
+async def refresh_token(req: RefreshTokenRequest, request: Request):
     """Refresh an access token and rotate refresh token for enhanced security."""
-    client_ip = http_request.client.host if http_request.client else None
-    user_agent = http_request.headers.get("user-agent")
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
-    session = auth.verify_refresh_token(request.refresh_token)
+    session = auth.verify_refresh_token(req.refresh_token)
 
     if not session:
         audit.log_token_refresh_failure(ip_address=client_ip, user_agent=user_agent, reason="invalid_token")
@@ -765,7 +765,7 @@ async def refresh_token(request: RefreshTokenRequest, http_request: Request):
         raise HTTPException(status_code=401, detail="User not found")
 
     # Revoke old refresh token immediately (token rotation)
-    auth.revoke_refresh_token(request.refresh_token)
+    auth.revoke_refresh_token(req.refresh_token)
 
     # Create new access token AND new refresh token
     access_token = auth.create_access_token(user["id"], user["default_profile_id"])
@@ -781,19 +781,19 @@ async def refresh_token(request: RefreshTokenRequest, http_request: Request):
 
 
 @app.post("/api/auth/logout")
-async def logout(request: RefreshTokenRequest, http_request: Request):
+async def logout(req: RefreshTokenRequest, request: Request):
     """Log out by revoking a refresh token."""
-    client_ip = http_request.client.host if http_request.client else None
-    user_agent = http_request.headers.get("user-agent")
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
     # Try to get user info from session before revoking
-    session = auth.verify_refresh_token(request.refresh_token)
+    session = auth.verify_refresh_token(req.refresh_token)
     if session:
         user = auth.get_user_by_id(session["user_id"])
         if user:
             audit.log_logout(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent)
 
-    auth.revoke_refresh_token(request.refresh_token)
+    auth.revoke_refresh_token(req.refresh_token)
     return {"success": True}
 
 
@@ -829,9 +829,9 @@ async def join_waitlist(request: Request, waitlist_data: WaitlistRequest):
 
 
 @app.get("/api/invite/validate/{token}")
-async def validate_invite(token: str, http_request: Request):
+async def validate_invite(token: str, request: Request):
     """Validate an invite token."""
-    client_ip = http_request.client.host if http_request.client else None
+    client_ip = request.client.host if request.client else None
 
     is_valid, error = storage.validate_invite_token(token)
 
@@ -855,4 +855,4 @@ async def validate_invite(token: str, http_request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8003)

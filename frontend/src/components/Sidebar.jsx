@@ -14,6 +14,7 @@ export default function Sidebar({
   user,
   onLogin,
   onLogout,
+  onAbout,
 }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -94,7 +95,12 @@ export default function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h1>LLM Council</h1>
+        <div className="sidebar-title-row">
+          <h1>LLM Council</h1>
+          <button className="about-icon-btn" onClick={onAbout} title="About LLM Council">
+            ℹ️
+          </button>
+        </div>
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
         </button>

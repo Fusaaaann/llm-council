@@ -16,7 +16,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
 
   const loadCurrentConfig = async () => {
     try {
-      const response = await fetch('http://localhost:8001/api/models');
+      const response = await fetch('http://localhost:8003/api/models');
       const data = await response.json();
       setCouncilModels(data.council_models);
       setChairmanModel(data.chairman_model);

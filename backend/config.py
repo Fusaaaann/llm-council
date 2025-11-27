@@ -58,3 +58,6 @@ ACCOUNT_LOCKOUT_DURATION_MINUTES = int(os.getenv("ACCOUNT_LOCKOUT_DURATION_MINUT
 
 # Audit logging
 AUDIT_LOG_FILE = "data/audit.log"
+
+# CORS settings for frontend
+FRONTEND_URLS = os.getenv("FRONTEND_URLS", "http://localhost:5173,http://localhost:3000").split(",")

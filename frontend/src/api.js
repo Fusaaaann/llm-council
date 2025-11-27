@@ -4,7 +4,7 @@
 
 import { getAccessToken, updateAccessToken, getRefreshToken, clearAuth } from './auth.js';
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
 
 // Get current profile ID from localStorage
 function getCurrentProfileId() {

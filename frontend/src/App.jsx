@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import AuthModal from './components/AuthModal';
+import AboutModal from './components/AboutModal';
 import { api } from './api';
 import { isAuthenticated, getCurrentUser, setAuth, clearAuth } from './auth';
 import './App.css';
@@ -15,6 +16,7 @@ function App() {
   const [abortController, setAbortController] = useState(null);
   const [user, setUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const [inviteToken, setInviteToken] = useState(null);
 
   // Check for invite token in URL on mount
@@ -196,7 +198,7 @@ function App() {
 
   const handleUpdateModels = async (councilModels, chairmanModel) => {
     try {
-      const response = await fetch('http://localhost:8001/api/models', {
+      const response = await fetch('http://localhost:8003/api/models', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -455,6 +457,7 @@ function App() {
         user={user}
         onLogin={() => setShowAuthModal(true)}
         onLogout={handleLogout}
+        onAbout={() => setShowAboutModal(true)}
       />
       <ChatInterface
         conversation={currentConversation}
@@ -470,6 +473,10 @@ function App() {
         onClose={() => setShowAuthModal(false)}
         onSuccess={handleAuth}
         inviteToken={inviteToken}
+      />
+      <AboutModal
+        isOpen={showAboutModal}
+        onClose={() => setShowAboutModal(false)}
       />
     </div>
   );

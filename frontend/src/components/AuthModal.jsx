@@ -20,7 +20,7 @@ function AuthModal({ isOpen, onClose, onSuccess, inviteToken = null }) {
 
   const validateInviteToken = async () => {
     try {
-      const response = await fetch(`http://localhost:8001/api/invite/validate/${inviteToken}`);
+      const response = await fetch(`http://localhost:8003/api/invite/validate/${inviteToken}`);
       if (response.ok) {
         const data = await response.json();
         setMode('register');
@@ -47,7 +47,7 @@ function AuthModal({ isOpen, onClose, onSuccess, inviteToken = null }) {
     try {
       if (mode === 'waitlist') {
         // Handle waitlist submission
-        const response = await fetch('http://localhost:8001/api/waitlist', {
+        const response = await fetch('http://localhost:8003/api/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, name })
