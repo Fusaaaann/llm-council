@@ -133,13 +133,25 @@ def save_sessions(sessions: Dict[str, Any]):
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    return bcrypt.hash(password)
+    """
+    Hash a password using bcrypt.
+
+    Truncates password to 72 bytes (bcrypt's maximum length) before hashing.
+    """
+    # Bcrypt has a 72-byte limit, truncate password if necessary
+    password_bytes = password.encode('utf-8')[:72]
+    return bcrypt.hash(password_bytes.decode('utf-8', errors='ignore'))
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Verify a password against its hash."""
-    return bcrypt.verify(password, hashed)
+    """
+    Verify a password against its hash.
+
+    Truncates password to 72 bytes (bcrypt's maximum length) before verification.
+    """
+    # Bcrypt has a 72-byte limit, truncate password if necessary
+    password_bytes = password.encode('utf-8')[:72]
+    return bcrypt.verify(password_bytes.decode('utf-8', errors='ignore'), hashed)
 
 
 def generate_user_id() -> str:

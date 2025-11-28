@@ -11,6 +11,24 @@ function getCurrentProfileId() {
   return localStorage.getItem('llm_council_profile_id') || 'default';
 }
 
+// Helper function to safely parse error responses (handles both JSON and HTML)
+async function parseErrorResponse(response) {
+  const contentType = response.headers.get('content-type');
+
+  // Check if response is JSON
+  if (contentType && contentType.includes('application/json')) {
+    try {
+      const data = await response.json();
+      return data.detail || data.message || 'An error occurred';
+    } catch (e) {
+      return 'Failed to parse error response';
+    }
+  }
+
+  // If HTML or other content, return generic message with status
+  return `Server error (${response.status}): ${response.statusText || 'Unknown error'}`;
+}
+
 // Get auth headers
 function getAuthHeaders() {
   const token = getAccessToken();
@@ -97,8 +115,8 @@ export const api = {
       body: JSON.stringify({ email, password, name, invite_token }),
     });
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to register');
+      const errorMsg = await parseErrorResponse(response);
+      throw new Error(errorMsg);
     }
     return response.json();
   },
@@ -115,8 +133,8 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to log in');
+      const errorMsg = await parseErrorResponse(response);
+      throw new Error(errorMsg);
     }
     return response.json();
   },
@@ -499,8 +517,8 @@ export const api = {
       body: JSON.stringify({ email, name }),
     });
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to join waitlist');
+      const errorMsg = await parseErrorResponse(response);
+      throw new Error(errorMsg);
     }
     return response.json();
   },
@@ -511,8 +529,8 @@ export const api = {
   async validateInviteToken(token) {
     const response = await fetch(`${API_BASE}/api/invite/validate/${token}`);
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Invalid invite token');
+      const errorMsg = await parseErrorResponse(response);
+      throw new Error(errorMsg);
     }
     return response.json();
   },
