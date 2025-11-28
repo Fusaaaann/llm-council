@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import './AuthModal.css';
+import { api } from '../api';
 
 function AuthModal({ isOpen, onClose, onSuccess, inviteToken = null }) {
   const [mode, setMode] = useState('login'); // 'login', 'register', or 'waitlist'
@@ -20,20 +21,14 @@ function AuthModal({ isOpen, onClose, onSuccess, inviteToken = null }) {
 
   const validateInviteToken = async () => {
     try {
-      const response = await fetch(`http://localhost:8003/api/invite/validate/${inviteToken}`);
-      if (response.ok) {
-        const data = await response.json();
-        setMode('register');
-        if (data.email) {
-          setInviteEmail(data.email);
-          setEmail(data.email);
-        }
-      } else {
-        const data = await response.json();
-        setError(data.detail || 'Invalid invite token');
+      const data = await api.validateInviteToken(inviteToken);
+      setMode('register');
+      if (data.email) {
+        setInviteEmail(data.email);
+        setEmail(data.email);
       }
     } catch (err) {
-      setError('Failed to validate invite token');
+      setError(err.message);
     }
   };
 
@@ -47,17 +42,7 @@ function AuthModal({ isOpen, onClose, onSuccess, inviteToken = null }) {
     try {
       if (mode === 'waitlist') {
         // Handle waitlist submission
-        const response = await fetch('http://localhost:8003/api/waitlist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, name })
-        });
-
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.detail || 'Failed to join waitlist');
-        }
-
+        await api.joinWaitlist(email, name);
         setWaitlistSuccess(true);
         setEmail('');
         setName('');

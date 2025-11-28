@@ -4,7 +4,7 @@
 
 import { getAccessToken, updateAccessToken, getRefreshToken, clearAuth } from './auth.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
 
 // Get current profile ID from localStorage
 function getCurrentProfileId() {
@@ -483,5 +483,80 @@ export const api = {
       throw new Error('Failed to decrypt conversation');
     }
     return response.json();
+  },
+
+  // ==================== Waitlist & Invites ====================
+
+  /**
+   * Join the waitlist.
+   */
+  async joinWaitlist(email, name) {
+    const response = await fetch(`${API_BASE}/api/waitlist`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, name }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to join waitlist');
+    }
+    return response.json();
+  },
+
+  /**
+   * Validate an invite token.
+   */
+  async validateInviteToken(token) {
+    const response = await fetch(`${API_BASE}/api/invite/validate/${token}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Invalid invite token');
+    }
+    return response.json();
+  },
+
+  // ==================== Models Configuration ====================
+
+  /**
+   * Get current model configuration.
+   */
+  async getModels() {
+    const response = await fetchWithAuth(`${API_BASE}/api/models`);
+    if (!response.ok) {
+      throw new Error('Failed to get models');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update model configuration.
+   */
+  async updateModels(councilModels, chairmanModel) {
+    const response = await fetchWithAuth(`${API_BASE}/api/models`, {
+      method: 'POST',
+      body: JSON.stringify({
+        council_models: councilModels,
+        chairman_model: chairmanModel,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update models');
+    }
+    return response.json();
+  },
+
+  // ==================== Static Content ====================
+
+  /**
+   * Fetch markdown content from public directory.
+   */
+  async fetchMarkdownContent(path) {
+    const response = await fetch(path);
+    if (!response.ok) {
+      throw new Error('Failed to load content');
+    }
+    return response.text();
   },
 };

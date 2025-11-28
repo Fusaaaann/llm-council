@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import './ModelConfig.css';
 import EncryptionControls from './EncryptionControls';
+import { api } from '../api';
 
 export default function ModelConfig({ isOpen, onClose, onSave, currentConversationId }) {
   const [councilModels, setCouncilModels] = useState([]);
@@ -16,8 +17,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
 
   const loadCurrentConfig = async () => {
     try {
-      const response = await fetch('http://localhost:8003/api/models');
-      const data = await response.json();
+      const data = await api.getModels();
       setCouncilModels(data.council_models);
       setChairmanModel(data.chairman_model);
     } catch (error) {

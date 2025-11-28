@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import './AboutModal.css';
+import { api } from '../api';
 
 function AboutModal({ isOpen, onClose }) {
   const [content, setContent] = useState('');
@@ -17,11 +18,7 @@ function AboutModal({ isOpen, onClose }) {
     try {
       setIsLoading(true);
       setError(null);
-      const response = await fetch('/docs/about.md');
-      if (!response.ok) {
-        throw new Error('Failed to load about content');
-      }
-      const text = await response.text();
+      const text = await api.fetchMarkdownContent('/docs/about.md');
       setContent(text);
     } catch (err) {
       setError(err.message);

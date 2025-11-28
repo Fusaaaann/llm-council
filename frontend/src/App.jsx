@@ -3,7 +3,7 @@ import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import AuthModal from './components/AuthModal';
 import AboutModal from './components/AboutModal';
-import { api } from './api';
+import { api, API_BASE } from './api';
 import { isAuthenticated, getCurrentUser, setAuth, clearAuth } from './auth';
 import './App.css';
 
@@ -198,19 +198,7 @@ function App() {
 
   const handleUpdateModels = async (councilModels, chairmanModel) => {
     try {
-      const response = await fetch('http://localhost:8003/api/models', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          council_models: councilModels,
-          chairman_model: chairmanModel,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error('Failed to update models');
-      }
+      await api.updateModels(councilModels, chairmanModel);
     } catch (error) {
       console.error('Failed to update models:', error);
       throw error;
