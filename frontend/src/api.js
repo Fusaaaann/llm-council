@@ -2,13 +2,13 @@
  * API client for the LLM Council backend.
  */
 
-import { getAccessToken, updateAccessToken, getRefreshToken, clearAuth } from './auth.js';
+import { getAccessToken, updateAccessToken, updateRefreshToken, getRefreshToken, clearAuth, getProfileIdKey } from './auth.js';
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
 
 // Get current profile ID from localStorage
 function getCurrentProfileId() {
-  return localStorage.getItem('llm_council_profile_id') || 'default';
+  return localStorage.getItem(getProfileIdKey()) || 'default';
 }
 
 // Helper function to safely parse error responses (handles both JSON and HTML)
@@ -37,6 +37,9 @@ function getAuthHeaders() {
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+    console.log('[API] Adding auth header:', token.substring(0, 10) + '...');
+  } else {
+    console.warn('[API] No access token available for auth header');
   }
   return headers;
 }
@@ -45,6 +48,7 @@ function getAuthHeaders() {
 async function refreshAccessToken() {
   const refreshToken = getRefreshToken();
   if (!refreshToken) {
+    console.warn('[API] No refresh token available');
     return false;
   }
 
@@ -58,14 +62,20 @@ async function refreshAccessToken() {
     });
 
     if (!response.ok) {
+      console.error('[API] Token refresh failed:', response.status, response.statusText);
       return false;
     }
 
     const data = await response.json();
+    console.log('[API] Token refresh successful, updating tokens');
     updateAccessToken(data.access_token);
+    // IMPORTANT: Backend rotates refresh tokens (single-use), must store new one
+    if (data.refresh_token) {
+      updateRefreshToken(data.refresh_token);
+    }
     return true;
   } catch (error) {
-    console.error('Failed to refresh token:', error);
+    console.error('[API] Token refresh error:', error);
     return false;
   }
 }
@@ -136,7 +146,13 @@ export const api = {
       const errorMsg = await parseErrorResponse(response);
       throw new Error(errorMsg);
     }
-    return response.json();
+    const data = await response.json();
+    console.log('[API] login() successful, received data:', {
+      hasAccessToken: !!data.access_token,
+      hasRefreshToken: !!data.refresh_token,
+      user: data.user
+    });
+    return data;
   },
 
   /**
@@ -251,19 +267,61 @@ export const api = {
    */
   async sendMessageStream(conversationId, content, signal, onEvent) {
     const profileId = getCurrentProfileId();
-    const response = await fetchWithAuth(
+
+    // Connection token will be received in stream_init event
+    let connectionToken = null;
+
+    // Enhanced event handler wrapper to capture connection token
+    const wrappedOnEvent = (eventType, event) => {
+      if (eventType === 'stream_init') {
+        connectionToken = event.connection_token;
+        console.log('[API] Connection token received for stream:', event.stream_id);
+        // Don't pass stream_init to caller (internal event)
+        return;
+      }
+      onEvent(eventType, event);
+    };
+
+    // Start the stream with access token
+    let response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
       {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: JSON.stringify({ content }),
         signal: signal,
       }
     );
 
     if (!response.ok) {
-      throw new Error('Failed to send message');
+      // Handle 401 specifically
+      if (response.status === 401) {
+        // Try to refresh access token once
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          // Retry the stream with new access token
+          response = await fetch(
+            `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
+            {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ content }),
+              signal: signal,
+            }
+          );
+          if (!response.ok) {
+            throw new Error('Failed to send message after token refresh');
+          }
+        } else {
+          clearAuth();
+          throw new Error('Authentication expired. Please log in again.');
+        }
+      } else {
+        throw new Error('Failed to send message');
+      }
     }
 
+    // Read the stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
@@ -279,13 +337,16 @@ export const api = {
           const data = line.slice(6);
           try {
             const event = JSON.parse(data);
-            onEvent(event.type, event);
+            wrappedOnEvent(event.type, event);
           } catch (e) {
             console.error('Failed to parse SSE event:', e);
           }
         }
       }
     }
+
+    // Note: Connection token is available for reconnection logic in the future
+    // Currently we don't expose it, but it's stored and could be used if network drops
   },
 
   /**

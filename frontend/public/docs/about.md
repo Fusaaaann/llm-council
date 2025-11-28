@@ -1,4 +1,4 @@
-This is a council, a parliament formed by <p title="aka AI, if you wish">LLMs</p>. Ask about glitches you’ve noticed in the world, trends you want to predict, or any question you feel is important.
+This is a council, a parliament formed by LLMs. Ask about glitches you’ve noticed in the world, trends you want to predict, or any question you feel is important.
 
 Conversations on this platform are visible to all logged-in users. Do not include any [personally identifiable information](https://www.privacyguides.org/en/basics/why-privacy-matters/) in your questions.
 

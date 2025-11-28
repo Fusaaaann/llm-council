@@ -4,14 +4,18 @@ This file contains technical details, architectural decisions, and important imp
 
 ## Project Overview
 
-LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
+LLM Council is a **3.5-stage deliberation system** where multiple LLMs collaboratively answer user questions through initial responses, cross-interrogation, peer review, and final synthesis. The key innovations are Stage 1.5 (cross-interrogation) and anonymized peer review in Stage 2, preventing models from playing favorites.
 
 **Key Features:**
+- **Stage 1.5 Cross-Interrogation**: Models question each other's responses to uncover deeper insights
 - **Streaming responses**: Progressive display of each stage as it completes via Server-Sent Events
-- **Metadata persistence**: label_to_model and aggregate_rankings now saved with messages
-- **Edit/Retry actions**: Users can edit or retry their last message
+- **Streaming heartbeat & auth monitoring**: Connection tokens and session validation during long streams
+- **Proactive token refresh**: Prevents mid-stream authentication failures
+- **Metadata persistence**: label_to_model and aggregate_rankings saved with messages
+- **Edit/Retry/Cancel actions**: Full message control with cancellation support
 - **Multi-turn conversations**: Input field always visible for continued dialogue
-- **Local-first storage**: Frontend can use localStorage with optional backend sync
+- **Encryption at rest**: Messages encrypted with Fernet (AES-128-CBC), with UI controls
+- **About modal**: User documentation loaded from `/docs/about.md`
 - **Profile-based multi-tenancy**: Conversations organized by profiles
 - **Public/Private conversations**: Publish to forum or keep private
 - **BYOK support**: Bring-Your-Own-Key conversations stay private by default
@@ -45,17 +49,19 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - `authenticate_user()`: Email/password authentication **with account lockout protection**
 - `create_access_token()`: Generate JWT access token
 - `create_refresh_token_record()`: Generate and store refresh token
+- `create_connection_token()`: Generate token for streaming session validation (2hr expiry)
 - `verify_access_token()`: Validate JWT token
 - `verify_refresh_token()`: Validate refresh token from session store
+- `verify_connection_token()`: Validate connection token (for heartbeat checks)
 - `revoke_refresh_token()`: Single token revocation (logout)
 - `revoke_all_user_sessions()`: All sessions revocation
-- **NEW security functions:**
+- **Security functions:**
   - `is_account_locked()`: Check if account is locked
   - `lock_account()`: Lock account for specified duration
   - `record_failed_login()`: Track failed attempts, auto-lock at threshold
   - `reset_failed_login_attempts()`: Clear counter on successful login
-  - `load_users()` / `save_users()`: **Now encrypt/decrypt data at rest**
-  - `load_sessions()` / `save_sessions()`: **Now encrypt/decrypt data at rest**
+  - `load_users()` / `save_users()`: **Encrypt/decrypt data at rest**
+  - `load_sessions()` / `save_sessions()`: **Encrypt/decrypt data at rest**
 - User storage in `data/users.json` **(encrypted)**
 - Session storage in `data/sessions.json` **(encrypted)**
 - Each user gets a default profile automatically
@@ -139,12 +145,16 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - `isAuthenticated()`: Check if user is logged in
 - `clearAuth()`: Remove all auth data (logout)
 - `updateAccessToken()`: Update token after refresh
-- **REQUIRED UPDATE:** `updateRefreshToken()` - **Must store new refresh token from `/api/auth/refresh` response**
+- `updateRefreshToken()`: Store new refresh token (supports token rotation) ✓
 
 **`api.js`** - Enhanced with Authentication
 - `fetchWithAuth()`: Wrapper that adds Authorization header
 - Automatic token refresh: Catches 401, refreshes token, retries request
+- **Proactive token refresh**: Checks JWT expiry before streaming (< 5 min threshold)
+- **Streaming-specific handling**: Uses direct fetch() for streams to prevent connection loss
 - Auth endpoints: register(), login(), logout(), getCurrentUser()
+- Encryption endpoints: getEncryptionStatus(), encryptConversation(), decryptConversation()
+- Markdown fetching: fetchMarkdownContent() for loading About page
 - All API methods updated to use fetchWithAuth()
 
 **`AuthModal.jsx`** - Login/Register/Waitlist UI
@@ -173,7 +183,7 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
 - Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
 - Uses environment variable `OPENROUTER_API_KEY` from `.env`
-- Backend runs on **port 8001** (NOT 8000 - user had another app on 8000)
+- Backend runs on **port 8003** (changed to avoid conflicts)
 - `ENVIRONMENT`: "local" or "production" mode (default: "local")
 - `DEFAULT_PROFILE_ID`: Default profile for local development (default: "default")
 - `PROFILES_FILE`: Path to profiles metadata file
@@ -195,6 +205,16 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 
 **`council.py`** - The Core Logic
 - `stage1_collect_responses()`: Parallel queries to all council models
+- **`stage1_5_cross_interrogation()`**: NEW - Models generate follow-up questions about other responses
+  - Anonymizes responses as "Response A, B, C, etc."
+  - Each model asks 1-2 targeted questions about OTHER responses
+  - Questions probe assumptions, ambiguities, and unmentioned aspects
+  - Returns tuple: (questions_list, label_to_model_dict)
+- **`stage1_5_collect_answers()`**: NEW - Models answer questions directed at them
+  - Parses questions by target response label
+  - Each model receives questions about their Stage 1 response
+  - Models defend reasoning or acknowledge overlooked aspects
+  - Returns list with original_response, questions, and answers
 - `stage2_collect_rankings()`:
   - Anonymizes responses as "Response A, B, C, etc."
   - Creates `label_to_model` mapping for de-anonymization
@@ -204,6 +224,7 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings
 - `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
 - `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
+- `generate_conversation_title()`: Async title generation using gemini-2.5-flash (fast)
 
 **`encryption.py`** - Conversation Encryption
 - Symmetric encryption using Fernet (AES-128-CBC) for messages at rest
@@ -239,9 +260,13 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
   - GET `/api/conversations/{id}?profile_id=<id>` - Get conversation
   - PATCH `/api/conversations/{id}/rename?profile_id=<id>` - Rename conversation
   - DELETE `/api/conversations/{id}?profile_id=<id>` - Delete conversation
-  - POST `/api/conversations/{id}/message?profile_id=<id>` - Send message (batch)
-  - POST `/api/conversations/{id}/message/stream?profile_id=<id>` - Send message (streaming, PREFERRED)
-  - GET `/api/conversations/{id}/export/{format}?profile_id=<id>` - Export conversation
+  - POST `/api/conversations/{id}/message?profile_id=<id>` - Send message (batch, includes Stage 1.5)
+  - POST `/api/conversations/{id}/message/stream?profile_id=<id>` - Send message (streaming, **PREFERRED**)
+  - GET `/api/conversations/{id}/export/{format}?profile_id=<id>` - Export conversation (markdown/pdf)
+- **Encryption Endpoints:**
+  - GET `/api/conversations/{id}/encryption-status?profile_id=<id>` - Get encryption status
+  - POST `/api/conversations/{id}/encrypt?profile_id=<id>` - Encrypt conversation messages
+  - POST `/api/conversations/{id}/decrypt?profile_id=<id>` - Decrypt conversation (save as plaintext)
 - **Profile Endpoints:**
   - GET `/api/profiles` - List all profiles
   - GET `/api/profiles/{id}` - Get profile
@@ -253,9 +278,15 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
   - DELETE `/api/conversations/{id}/unpublish?profile_id=<id>` - Unpublish from forum
   - GET `/api/forum/conversations` - List public conversations
   - GET `/api/forum/conversations/{id}?profile_id=<id>` - Get public conversation
-- Streaming endpoint sends events: stage1_start, stage1_complete, stage1_5_questions_start, stage1_5_questions_complete, stage1_5_answers_start, stage1_5_answers_complete, stage2_start, stage2_complete, stage3_start, stage3_complete, title_complete, complete, error
+- **Streaming Features:**
+  - Events sent: `stream_init`, `stage1_start`, `stage1_complete`, `stage1_5_questions_start`, `stage1_5_questions_complete`, `stage1_5_answers_start`, `stage1_5_answers_complete`, `stage2_start`, `stage2_complete`, `stage3_start`, `stage3_complete`, `title_complete`, `complete`, `error`, `heartbeat`, `auth_expired`
+  - **Connection tokens**: Generated per stream for session validation (2hr expiry)
+  - **Heartbeat monitoring**: Every 60 seconds with session validity check
+  - **Auth expiry detection**: Detects logout-elsewhere scenarios during long streams
+  - **Idempotent message handling**: Prevents duplicate user messages on retry
+  - **Partial state saving**: Saves after each stage completion for resilience
 - Title generation runs in parallel with Stage 1 to minimize perceived latency
-- Metadata includes: label_to_model mapping and aggregate_rankings
+- Metadata includes: label_to_model mapping, aggregate_rankings, and stage1_5 data
 
 ### Frontend Structure (`frontend/src/`)
 
@@ -287,28 +318,46 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 - **Handlers:**
   - `handleEditMessage()`: Removes last user message + assistant response, populates input field
   - `handleRetryMessage()`: Removes last assistant response, resends user message
+  - `handleCancelMessage()`: Cancels ongoing stream via AbortController
   - `handlePublishConversation()`: Publishes conversation to forum
   - `handleUnpublishConversation()`: Unpublishes conversation from forum
+- **Event handling:**
+  - Processes all streaming events (stage1-3, stage1_5, heartbeat, auth_expired)
+  - Handles auth expiration during streams (refreshes token or logs out)
+  - Updates loading states progressively as stages complete
 - Metadata now persisted in backend and reloaded from storage
 - Progressive UI updates: each stage updates in real-time as events arrive
 
 **`components/ChatInterface.jsx`**
-- **UPDATED**: Input field always visible (not just for first message)
+- Input field always visible for multi-turn conversations
 - Multiline textarea (3 rows, resizable) with ref for programmatic focus
 - Enter to send, Shift+Enter for new line
 - User messages wrapped in markdown-content class for padding
-- **New features:**
-  - Edit/Retry buttons on last user message (when not loading)
+- **Features:**
+  - Edit/Retry/Cancel buttons on last user message (when not loading)
   - Edit button populates input field and focuses it
+  - Cancel button aborts ongoing stream
   - Progressive loading indicators for each stage during streaming
+  - Model configuration UI (change council/chairman models)
+  - Encryption controls component integration
 
 **`components/Stage1.jsx`**
 - Tab view of individual model responses
 - ReactMarkdown rendering with markdown-content wrapper
 
+**`components/Stage1_5.jsx`** - NEW Cross-Interrogation Display
+- Tab view showing each model's Q&A session
+- **Three collapsible sections per model:**
+  - 📝 Questions Received (from other models)
+  - 💬 Answers Provided (responses to questions)
+  - 📄 Original Response (reference, collapsed by default)
+- Shows question metadata (from which model)
+- De-anonymizes model names in displayed text
+- Expandable/collapsible sections for better UX
+
 **`components/Sidebar.jsx`**
 - Shows conversation list with metadata
-- **New UI elements:**
+- **UI elements:**
   - Sync status icon: 💾 (local), ⏳ (syncing), ☁️ (synced)
   - Public badge: 🌐 (visible for public conversations)
   - BYOK badge: 🔑 (visible for BYOK conversations)
@@ -316,9 +365,10 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
   - Rename, Publish/Unpublish, Export (Markdown/PDF), Delete
   - Publish disabled for BYOK conversations
 - Shows loading spinner for conversations being processed
+- About button opens AboutModal
 
 **`components/Stage2.jsx`**
-- **Critical Feature**: Tab view showing RAW evaluation text from each model
+- Tab view showing RAW evaluation text from each model
 - De-anonymization happens CLIENT-SIDE for display (models receive anonymous labels)
 - Shows "Extracted Ranking" below each evaluation so users can validate parsing
 - Aggregate rankings shown with average position and vote count
@@ -327,6 +377,19 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 **`components/Stage3.jsx`**
 - Final synthesized answer from chairman
 - Green-tinted background (#f0fff0) to highlight conclusion
+
+**`components/AboutModal.jsx`** - NEW User Documentation
+- Modal overlay displaying about/documentation content
+- Fetches markdown from `/docs/about.md` endpoint
+- ReactMarkdown rendering with loading and error states
+- "Got it" button to close
+
+**`components/EncryptionControls.jsx`** - NEW Encryption Management
+- Shows encryption status (encrypted/plaintext)
+- Displays provider and version when encrypted
+- Encrypt/decrypt buttons for manual control
+- Confirmation dialogs before operations
+- Info text explaining what's encrypted (messages, not metadata)
 
 **Styling (`*.css`)**
 - Light mode theme (not dark mode)
@@ -438,7 +501,7 @@ This strict format allows reliable parsing while still getting thoughtful evalua
 All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
 
 ### Port Configuration & Deployment
-- Backend: 8001 (changed from 8000 to avoid conflict)
+- Backend: **8003** (changed from 8000, then 8001 to avoid conflicts)
 - Frontend: 5173 (Vite default)
 
 **Environment Variables for Deployment:**
@@ -479,13 +542,44 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 3. **API URL Configuration**: Frontend needs `VITE_API_BASE_URL` set before build for production deployment
 4. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
 5. **Metadata Persistence**: ~~Metadata is ephemeral (not persisted)~~ **FIXED** - Metadata now persisted in storage.py
-6. **Streaming Connection**: EventSource connections can timeout; frontend handles reconnection via error events
-7. **Encryption Key Loss**: Lost `ENCRYPTION_KEY` = permanently lost conversations. ALWAYS back up `.env` file
-8. **Missing cryptography Package**: Encryption requires `cryptography` library - install via `pip install cryptography`
+6. **Streaming Connection Loss**: ~~EventSource connections can timeout~~ **FIXED** - Proactive token refresh prevents mid-stream expiry
+7. **Token Expiry During Stream**: Tokens are now refreshed proactively if < 5 min remaining before streaming starts
+8. **Refresh Token Already Used**: Token rotation means refresh tokens are single-use; frontend must store new token from refresh response
+9. **Encryption Key Loss**: Lost `ENCRYPTION_KEY` = permanently lost conversations. ALWAYS back up `.env` file
+10. **Missing cryptography Package**: Encryption requires `cryptography` library - install via `pip install cryptography`
+11. **Long Stream Auth Issues**: Connection tokens (2hr expiry) validate stream ownership; heartbeats check for logout-elsewhere scenarios
 
 ## Recent Updates (Latest Session)
 
-### 🔒 Security Hardening (Current Session - 2025-11-26)
+### 🔧 Streaming Token Expiry Fix (Session 2025-11-29)
+
+Fixed critical issue where UI state was lost mid-stream due to token expiration:
+
+**Problem:**
+- Access tokens expire after 15 minutes
+- Long streams (5-10+ min) could expire mid-stream
+- Automatic token refresh during stream lost connection and all partial data
+- User saw UI reset to empty state after Stage 1.5
+
+**Solution:**
+1. ✅ **Proactive token refresh** - Checks JWT expiry before streaming (< 5 min threshold)
+2. ✅ **Direct fetch for streams** - Uses `fetch()` instead of `fetchWithAuth()` to prevent auto-retry during stream
+3. ✅ **Refresh token rotation support** - Added `updateRefreshToken()` to store new tokens
+4. ✅ **Connection tokens** - Generated per stream for session validation during heartbeats
+5. ✅ **Heartbeat with auth checks** - Every 60s checks if user logged out elsewhere
+6. ✅ **Auth expiry events** - `auth_expired` event sent to frontend with reason
+
+**Files Modified:**
+- `frontend/src/api.js` - Proactive token refresh, JWT decode, streaming fixes
+- `frontend/src/auth.js` - Added `updateRefreshToken()` function
+- `frontend/src/App.jsx` - Handle `auth_expired` events during streams
+- `backend/auth.py` - Added `create_connection_token()` and `verify_connection_token()`
+- `backend/main.py` - Connection token generation, heartbeat with session checks
+
+**Documentation:**
+- `ai_notes/STREAMING_TOKEN_FIX.md` - Full technical documentation
+
+### 🔒 Security Hardening (Session 2025-11-26)
 
 Comprehensive security overhaul addressing critical vulnerabilities:
 
@@ -518,9 +612,37 @@ Comprehensive security overhaul addressing critical vulnerabilities:
 - `pyproject.toml` - Added slowapi dependency
 - `.env.example` - Security configuration docs
 
-**⚠️ BREAKING CHANGE:** Refresh token rotation requires frontend update. See `FRONTEND_CHANGES_REQUIRED.md`.
+### 🔄 Stage 1.5 Cross-Interrogation (Session 2025-11-24)
 
-### Waitlist & Invite System (Previous Session)
+Added new deliberation stage between initial responses and peer review:
+
+**Feature:**
+- Models generate follow-up questions about OTHER models' responses
+- Each model answers questions directed at them
+- Uncovers assumptions, ambiguities, and overlooked aspects
+- Enhances depth of deliberation before final ranking
+
+**Implementation:**
+1. ✅ **Question generation phase** - Each model asks 1-2 questions about other responses
+2. ✅ **Answer collection phase** - Models answer questions directed at them
+3. ✅ **Anonymization maintained** - Uses same "Response A/B/C" labels as Stage 2
+4. ✅ **UI components** - Collapsible sections showing questions received, answers provided, original response
+
+**Files Created:**
+- `frontend/src/components/Stage1_5.jsx` - UI component for cross-interrogation display
+- `frontend/src/components/Stage1_5.css` - Styling for collapsible sections
+- `ai_notes/STAGE_1_5_IMPLEMENTATION.md` - Technical documentation
+
+**Files Modified:**
+- `backend/council.py` - Added `stage1_5_cross_interrogation()` and `stage1_5_collect_answers()`
+- `backend/main.py` - Integrated Stage 1.5 into batch and streaming endpoints
+- `backend/storage.py` - Added stage1_5 field to assistant messages
+- `frontend/src/App.jsx` - Handle stage1_5 events and state updates
+
+**Documentation:**
+- `ai_notes/STAGE_1_5_IMPLEMENTATION.md` - Full technical details
+
+### Waitlist & Invite System (Session 2025-11-26)
 - **Added waitlist system**: Users can join waitlist without invite
 - **Backend changes**:
   - `backend/config.py`: Added `ADMIN_EMAIL`, `WAITLIST_FILE`, `INVITES_FILE`, `INVITE_TOKEN_EXPIRE_DAYS`
@@ -540,7 +662,7 @@ Comprehensive security overhaul addressing critical vulnerabilities:
 - **Production mode**: Registration requires valid invite token
 - **Local mode**: Registration works without invite token for development
 
-### Encrypted Conversation Storage (Previous Session)
+### Encrypted Conversation Storage (Session 2025-11-26)
 - **Added `backend/encryption.py`**: Encryption provider system with Fernet implementation
 - **Modified `backend/storage.py`**: Automatic encryption/decryption of messages at rest
 - **Updated `backend/config.py`**: Encryption configuration settings
@@ -595,11 +717,29 @@ Use `test_openrouter.py` to verify API connectivity and test different model ide
 ```
 User Query → POST /api/conversations/{id}/message/stream
     ↓
+[Proactive token refresh if < 5 min until expiry]
+    ↓
+[Event: stream_init] → Connection token generated, sent to frontend
+    ↓
 [Event: stage1_start] → UI shows "Stage 1 Loading..."
     ↓
 Stage 1: Parallel queries → [individual responses]
     ↓
-[Event: stage1_complete] → UI displays tabs with responses
+[Event: stage1_complete] → UI displays tabs with responses → Save partial state
+    ↓
+[Event: stage1_5_questions_start] → UI shows "Stage 1.5 Loading..."
+    ↓
+Stage 1.5 Part 1: Anonymize → Generate cross-questions → [questions from each model]
+    ↓
+[Event: stage1_5_questions_complete] → Store questions in state
+    ↓
+[Event: stage1_5_answers_start] → Continue loading indicator
+    ↓
+Stage 1.5 Part 2: Parse questions by target → Collect answers → [Q&A pairs]
+    ↓
+[Event: stage1_5_answers_complete] → UI displays Q&A tabs → Save partial state
+    ↓
+[Heartbeat check: validate session, send heartbeat/auth_expired event]
     ↓
 [Event: stage2_start] → UI shows "Stage 2 Loading..."
     ↓
@@ -607,31 +747,73 @@ Stage 2: Anonymize → Parallel ranking queries → [evaluations + rankings]
     ↓
 Calculate aggregate rankings → metadata assembled
     ↓
-[Event: stage2_complete + metadata] → UI displays rankings
+[Event: stage2_complete + metadata] → UI displays rankings → Save partial state
+    ↓
+[Heartbeat check: validate session]
     ↓
 [Event: stage3_start] → UI shows "Stage 3 Loading..."
     ↓
-Stage 3: Chairman synthesis with full context
+Stage 3: Chairman synthesis with full context (Stage 1 + 1.5 + Stage 2)
     ↓
-[Event: stage3_complete] → UI displays final answer
+[Event: stage3_complete] → UI displays final answer → Save partial state
     ↓
-[Event: title_complete] (first message only) → Sidebar updates
+[Event: title_complete] (first message only, parallel) → Sidebar updates
     ↓
-[Event: complete] → Save to storage with metadata → Done
+[Event: complete] → Mark conversation not loading → Done
 ```
+
+**Notes:**
+- Title generation runs in parallel with Stage 1 (doesn't block)
+- Partial state saved after each major stage for resilience
+- Heartbeats sent every 60 seconds with session validation
+- Connection tokens validate stream ownership (2hr expiry)
+- Idempotent message handling prevents duplicates on retry
 
 ### Storage Flow
 ```
 In-memory State (during stream)
     ↓
-storage.add_assistant_message(stage1, stage2, stage3, metadata)
+storage.save_partial_assistant_message() called after each stage
     ↓
-JSON file: data/conversations/{id}.json
+JSON file: data/conversations/profile_<id>/<conversation_id>.json
     ↓
 {
+  id, profile_id, created_at, title, is_public, uses_byok, sync_status,
   messages: [
-    {role: "assistant", stage1: [...], stage2: [...], stage3: {...}, metadata: {...}}
+    {
+      role: "user",
+      content: "..."
+    },
+    {
+      role: "assistant",
+      stage1: [{model, response}, ...],
+      stage1_5: {
+        questions: [{model, questions}, ...],
+        answers: [{model, original_response, questions, answers}, ...],
+        label_to_model: {"Response A": "model/name", ...}
+      },
+      stage2: [{model, ranking, parsed_ranking}, ...],
+      stage3: {model, response},
+      metadata: {
+        label_to_model: {"Response A": "model/name", ...},
+        aggregate_rankings: [{model, average_rank, rankings_count}, ...]
+      }
+    }
   ]
+}
+```
+
+**Encryption Note:**
+When encryption is enabled, the file structure becomes:
+```json
+{
+  "_encryption": {"version": "1.0", "provider": "fernet"},
+  "messages_encrypted": "<base64-ciphertext>",
+  "id": "...",
+  "profile_id": "...",
+  "title": "...",
+  "created_at": "...",
+  ... (all other metadata unencrypted)
 }
 ```
 

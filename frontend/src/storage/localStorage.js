@@ -3,24 +3,35 @@
  * Provides local-first storage with optional server sync.
  */
 
+import { getProfileIdKey } from '../auth.js';
+
+// Generate storage keys based on app origin to avoid conflicts
+function generateStorageKey(suffix) {
+  const origin = window.location.origin;
+  // Simple hash function for consistent key generation
+  const hash = Array.from(origin).reduce((acc, char) => {
+    return ((acc << 5) - acc) + char.charCodeAt(0) | 0;
+  }, 0);
+  return `llm_council_${Math.abs(hash)}_${suffix}`;
+}
+
 const STORAGE_KEYS = {
-  CONVERSATIONS: 'llm_council_conversations',
-  PROFILE_ID: 'llm_council_profile_id',
-  SETTINGS: 'llm_council_settings',
+  CONVERSATIONS: generateStorageKey('conversations'),
+  SETTINGS: generateStorageKey('settings'),
 };
 
 /**
  * Get the current profile ID.
  */
 export function getCurrentProfileId() {
-  return localStorage.getItem(STORAGE_KEYS.PROFILE_ID) || 'default';
+  return localStorage.getItem(getProfileIdKey()) || 'default';
 }
 
 /**
  * Set the current profile ID.
  */
 export function setCurrentProfileId(profileId) {
-  localStorage.setItem(STORAGE_KEYS.PROFILE_ID, profileId);
+  localStorage.setItem(getProfileIdKey(), profileId);
 }
 
 /**

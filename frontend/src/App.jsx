@@ -43,14 +43,92 @@ function App() {
     loadConversations();
   }, []);
 
-  // Poll for conversation loading states
+  // Smart polling for conversation loading states
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadConversations();
-    }, 1000); // Poll every second
+    let pollInterval = 1000; // Start with 1s
+    const MIN_INTERVAL = 1000;
+    const MAX_INTERVAL = 60000; // Max 60s
+    const IDLE_INTERVALS = [1000, 2000, 5000, 10000, 30000, 60000]; // Backoff schedule
+    const STOP_AFTER_MS = 5 * 60 * 1000; // Stop after 5 min idle
 
-    return () => clearInterval(interval);
-  }, []);
+    let intervalId = null;
+    let currentIntervalIndex = 0;
+    let lastActivityTime = Date.now();
+    let totalIdleTime = 0;
+
+    const hasActiveLoading = () => {
+      return conversations.some(conv => conv.is_loading);
+    };
+
+    const resetPolling = () => {
+      currentIntervalIndex = 0;
+      pollInterval = IDLE_INTERVALS[0];
+      lastActivityTime = Date.now();
+      totalIdleTime = 0;
+    };
+
+    const poll = async () => {
+      const now = Date.now();
+      const timeSinceLastActivity = now - lastActivityTime;
+
+      // Stop polling after prolonged inactivity
+      if (totalIdleTime >= STOP_AFTER_MS) {
+        console.log('[Polling] Stopped after 5 minutes of inactivity');
+        if (intervalId) clearInterval(intervalId);
+        return;
+      }
+
+      await loadConversations();
+
+      // If actively loading, reset to fast polling
+      if (hasActiveLoading() || isLoading) {
+        if (currentIntervalIndex !== 0) {
+          console.log('[Polling] Active loading detected, resetting to 1s interval');
+          resetPolling();
+          // Restart with new interval
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(poll, pollInterval);
+        }
+      } else {
+        // Idle - gradually slow down
+        totalIdleTime += timeSinceLastActivity;
+        lastActivityTime = now;
+
+        if (currentIntervalIndex < IDLE_INTERVALS.length - 1) {
+          currentIntervalIndex++;
+          pollInterval = IDLE_INTERVALS[currentIntervalIndex];
+          console.log(`[Polling] Backing off to ${pollInterval}ms interval`);
+
+          // Restart with new interval
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(poll, pollInterval);
+        }
+      }
+    };
+
+    // Start polling
+    intervalId = setInterval(poll, pollInterval);
+
+    // Reset polling on user activity
+    const activityHandler = () => {
+      if (totalIdleTime > 0 || currentIntervalIndex > 0) {
+        console.log('[Polling] User activity detected, resetting to 1s interval');
+        resetPolling();
+        if (intervalId) clearInterval(intervalId);
+        intervalId = setInterval(poll, pollInterval);
+      }
+    };
+
+    // Listen for user interactions
+    window.addEventListener('click', activityHandler);
+    window.addEventListener('keydown', activityHandler);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      window.removeEventListener('click', activityHandler);
+      window.removeEventListener('keydown', activityHandler);
+    };
+  }, [conversations, isLoading]);
 
   // Load conversation details when selected
   useEffect(() => {
@@ -157,6 +235,7 @@ function App() {
 
   const handleAuth = async (mode, credentials) => {
     try {
+      console.log('[APP] handleAuth called, mode:', mode);
       let result;
       if (mode === 'register') {
         result = await api.register(
@@ -169,15 +248,25 @@ function App() {
         result = await api.login(credentials.email, credentials.password);
       }
 
+      console.log('[APP] Auth API call successful, result:', {
+        hasAccessToken: !!result.access_token,
+        hasRefreshToken: !!result.refresh_token,
+        user: result.user
+      });
+
       // Store auth data
+      console.log('[APP] Calling setAuth with tokens...');
       setAuth(result.access_token, result.refresh_token, result.user);
+      console.log('[APP] Setting user state...');
       setUser(result.user);
       setShowAuthModal(false);
       setInviteToken(null); // Clear invite token after use
 
+      console.log('[APP] Auth complete, reloading conversations...');
       // Reload conversations for the authenticated user
       await loadConversations();
     } catch (error) {
+      console.error('[APP] handleAuth error:', error);
       throw error; // Re-throw to be handled by AuthModal
     }
   };
@@ -407,6 +496,43 @@ function App() {
             console.error('Stream error:', event.message);
             setIsLoading(false);
             setAbortController(null);
+            break;
+
+          case 'heartbeat':
+            // Keepalive event, no action needed
+            console.log('[Stream] Heartbeat received at', new Date(event.timestamp * 1000));
+            break;
+
+          case 'auth_expired':
+            // Token expired or user logged out elsewhere during stream
+            console.log('[Stream] Auth expired:', event.reason);
+            setIsLoading(false);
+            setAbortController(null);
+
+            if (event.reason === 'logged_out') {
+              // User logged out elsewhere
+              alert(event.message || 'Session ended. Please log in again.');
+              handleLogout();
+            } else {
+              // Token expired - try to refresh
+              console.log('[Stream] Attempting to refresh token...');
+              api.refreshAccessToken()
+                .then(refreshed => {
+                  if (refreshed) {
+                    console.log('[Stream] Token refreshed, stream can be retried');
+                    // Note: User can manually retry with the retry button
+                  } else {
+                    console.log('[Stream] Token refresh failed, logging out');
+                    alert('Session expired. Please log in again.');
+                    handleLogout();
+                  }
+                })
+                .catch(err => {
+                  console.error('[Stream] Token refresh error:', err);
+                  alert('Session expired. Please log in again.');
+                  handleLogout();
+                });
+            }
             break;
 
           default:

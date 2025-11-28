@@ -300,6 +300,118 @@ def revoke_all_user_sessions(user_id: str):
     save_sessions(sessions)
 
 
+# Connection token management (for streaming sessions)
+
+CONNECTION_TOKEN_EXPIRE_MINUTES = 30
+
+def create_connection_token(user_id: str, conversation_id: str, stream_id: str) -> str:
+    """
+    Generate single-use connection token for streaming session.
+
+    Args:
+        user_id: User identifier
+        conversation_id: Conversation being streamed
+        stream_id: Unique stream identifier
+
+    Returns:
+        JWT token with 30-minute expiry
+    """
+    payload = {
+        "sub": user_id,
+        "conversation_id": conversation_id,
+        "stream_id": stream_id,
+        "token_type": "connection",
+        "exp": datetime.utcnow() + timedelta(minutes=CONNECTION_TOKEN_EXPIRE_MINUTES),
+        "iat": datetime.utcnow()
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def verify_connection_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify and mark connection token as used (single-use).
+
+    Args:
+        token: Connection token to verify
+
+    Returns:
+        Decoded payload if valid and unused, None otherwise
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+
+        # Check if this is a connection token
+        if payload.get("token_type") != "connection":
+            return None
+
+        stream_id = payload.get("stream_id")
+        if not stream_id:
+            return None
+
+        # Check if already used
+        sessions = load_sessions()
+        connection_key = f"connection_{stream_id}"
+
+        if connection_key in sessions:
+            # Already used
+            return None
+
+        # Mark as used (store in sessions with TTL)
+        expires = datetime.utcnow() + timedelta(minutes=CONNECTION_TOKEN_EXPIRE_MINUTES)
+        sessions[connection_key] = {
+            "stream_id": stream_id,
+            "user_id": payload.get("sub"),
+            "conversation_id": payload.get("conversation_id"),
+            "used_at": datetime.utcnow().isoformat(),
+            "expires_at": expires.isoformat()
+        }
+        save_sessions(sessions)
+
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+
+def is_connection_token_used(stream_id: str) -> bool:
+    """
+    Check if a connection token has already been used.
+
+    Args:
+        stream_id: Stream identifier
+
+    Returns:
+        True if already used, False otherwise
+    """
+    sessions = load_sessions()
+    connection_key = f"connection_{stream_id}"
+    return connection_key in sessions
+
+
+def cleanup_expired_connection_tokens():
+    """
+    Clean up expired connection tokens from sessions store.
+    Should be called periodically to prevent storage bloat.
+    """
+    sessions = load_sessions()
+    now = datetime.utcnow()
+
+    expired_keys = []
+    for key, session in sessions.items():
+        if key.startswith("connection_"):
+            expires_at = datetime.fromisoformat(session.get("expires_at", ""))
+            if expires_at < now:
+                expired_keys.append(key)
+
+    for key in expired_keys:
+        del sessions[key]
+
+    if expired_keys:
+        save_sessions(sessions)
+        print(f"[INFO] Cleaned up {len(expired_keys)} expired connection tokens")
+
+
 def create_user(email: str, password: str, name: str, invite_token: Optional[str] = None) -> Dict[str, Any]:
     """
     Create a new user account.

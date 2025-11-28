@@ -299,6 +299,65 @@ def add_assistant_message(
     save_conversation(conversation)
 
 
+def save_partial_assistant_message(
+    conversation_id: str,
+    stage_name: str,
+    stage_data: Any,
+    metadata: Optional[Dict[str, Any]] = None,
+    profile_id: str = DEFAULT_PROFILE_ID
+):
+    """
+    Save or update partial assistant message after each stage completes.
+    Enables resume-from-checkpoint on reconnection.
+
+    Args:
+        conversation_id: Conversation identifier
+        stage_name: Name of stage ("stage1", "stage1_5", "stage2", "stage3")
+        stage_data: Data for this stage
+        metadata: Optional metadata to update
+        profile_id: Profile identifier
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    messages = conversation["messages"]
+    if not messages:
+        raise ValueError(f"No messages in conversation {conversation_id}")
+
+    last_message = messages[-1]
+
+    # If last message is user message, create new partial assistant message
+    if last_message.get("role") == "user":
+        partial_message = {
+            "role": "assistant",
+            "stage1": None,
+            "stage1_5": None,
+            "stage2": None,
+            "stage3": None,
+            "partial": True  # Mark as partial/incomplete
+        }
+        messages.append(partial_message)
+        last_message = partial_message
+
+    # Update the stage data
+    if last_message.get("role") == "assistant":
+        last_message[stage_name] = stage_data
+
+        # Update metadata if provided
+        if metadata:
+            if "metadata" not in last_message:
+                last_message["metadata"] = {}
+            last_message["metadata"].update(metadata)
+
+        # If stage3 is complete, mark as complete (remove partial flag)
+        if stage_name == "stage3":
+            last_message.pop("partial", None)
+
+    save_conversation(conversation)
+    print(f"[INFO] Saved partial state for conversation {conversation_id}, {stage_name}")
+
+
 def update_conversation_title(conversation_id: str, title: str, profile_id: str = DEFAULT_PROFILE_ID):
     """
     Update the title of a conversation.

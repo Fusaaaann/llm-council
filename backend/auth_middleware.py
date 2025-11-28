@@ -11,30 +11,55 @@ security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    required: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
-    Get current user from JWT token (optional).
+    Get current user from JWT token (access token OR connection token).
 
-    Returns None if no token or invalid token in local mode.
-    Raises 401 in production mode.
+    Returns None if no token or invalid token in local mode (when required=False).
+    Raises 401 in production mode or when required=True.
 
     Args:
         credentials: Bearer token from Authorization header
+        required: If True, always raise 401 on auth failure
 
     Returns:
-        User data dict or None
+        User data dict or None (when required=False and auth fails)
     """
     if not credentials:
-        if ENVIRONMENT == "production":
+        if ENVIRONMENT == "production" or required:
             raise HTTPException(status_code=401, detail="Authentication required")
         return None
 
     token = credentials.credentials
+
+    # Try connection token first (for streaming sessions)
+    from .auth import verify_connection_token
+    connection_payload = verify_connection_token(token)
+    if connection_payload:
+        # Valid connection token
+        user_id = connection_payload.get("sub")
+        user = get_user_by_id(user_id)
+
+        if not user:
+            if ENVIRONMENT == "production" or required:
+                raise HTTPException(status_code=401, detail="User not found")
+            return None
+
+        return {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "profile_id": user.get("default_profile_id"),  # Connection tokens use default profile
+            "default_profile_id": user["default_profile_id"]
+        }
+
+    # Fall back to access token validation
     payload = verify_access_token(token)
 
     if not payload:
-        if ENVIRONMENT == "production":
+        if ENVIRONMENT == "production" or required:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return None
 
@@ -42,7 +67,7 @@ async def get_current_user_optional(
     user = get_user_by_id(user_id)
 
     if not user:
-        if ENVIRONMENT == "production":
+        if ENVIRONMENT == "production" or required:
             raise HTTPException(status_code=401, detail="User not found")
         return None
 
@@ -55,13 +80,14 @@ async def get_current_user_optional(
     }
 
 
-async def get_current_user_required(
+async def ensure_user_logged_in(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> Dict[str, Any]:
     """
     Get current user from JWT token (required).
 
     Always raises 401 if no token or invalid token.
+    This is a convenience wrapper around get_current_user_optional(required=True).
 
     Args:
         credentials: Bearer token from Authorization header
@@ -72,28 +98,7 @@ async def get_current_user_required(
     Raises:
         HTTPException: 401 if authentication fails
     """
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    token = credentials.credentials
-    payload = verify_access_token(token)
-
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("sub")
-    user = get_user_by_id(user_id)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    return {
-        "id": user["id"],
-        "email": user["email"],
-        "name": user["name"],
-        "profile_id": payload.get("profile_id"),
-        "default_profile_id": user["default_profile_id"]
-    }
+    return await get_current_user_optional(credentials=credentials, required=True)
 
 
 def user_has_profile_access(user_id: str, profile_id: str) -> bool:

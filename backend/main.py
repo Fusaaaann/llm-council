@@ -9,6 +9,7 @@ import uuid
 import json
 import asyncio
 import sys
+import time
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -17,7 +18,7 @@ from . import config  # keep on top of other local modules
 from . import storage
 from . import auth
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage1_5_cross_interrogation, stage1_5_collect_answers, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
-from .auth_middleware import get_current_user_optional, get_current_user_required, get_profile_id_for_request
+from .auth_middleware import get_current_user_optional, ensure_user_logged_in, get_profile_id_for_request
 from .startup_validation import run_startup_validation, SecurityValidationError
 from .security_middleware import SecurityHeadersMiddleware
 from . import audit
@@ -426,11 +427,76 @@ async def send_message_stream(
 
     async def event_generator():
         try:
+            # Generate connection token for this streaming session
+            stream_id = str(uuid.uuid4())
+            connection_token = None
+
+            # Only generate connection token if user is authenticated
+            if user:
+                connection_token = auth.create_connection_token(
+                    user_id=user["id"],
+                    conversation_id=conversation_id,
+                    stream_id=stream_id
+                )
+
+            # Send stream initialization event with connection token
+            yield f"data: {json.dumps({
+                'type': 'stream_init',
+                'stream_id': stream_id,
+                'connection_token': connection_token
+            })}\n\n"
+
+            # Heartbeat tracking
+            last_heartbeat = [time.time()]  # Use list for mutability in nested function
+            HEARTBEAT_INTERVAL = 60  # seconds
+
+            def check_and_send_heartbeat():
+                """Check if heartbeat needed and return event if so."""
+                now = time.time()
+
+                if now - last_heartbeat[0] >= HEARTBEAT_INTERVAL:
+                    # Check if user session is still valid
+                    if user:
+                        # Verify user still has valid session (not logged out elsewhere)
+                        sessions = auth.load_sessions()
+                        user_sessions = [
+                            token for token, session in sessions.items()
+                            if not token.startswith("connection_") and session.get("user_id") == user["id"]
+                        ]
+
+                        if not user_sessions:
+                            # User logged out elsewhere - send auth_expired event
+                            return ('auth_expired', {
+                                'type': 'auth_expired',
+                                'reason': 'logged_out',
+                                'message': 'Session ended. Please log in again.'
+                            })
+
+                    # Send heartbeat
+                    last_heartbeat[0] = now
+                    return ('heartbeat', {
+                        'type': 'heartbeat',
+                        'timestamp': now
+                    })
+
+                return None  # No heartbeat needed
+
             # Set loading state to true
             storage.set_conversation_loading(conversation_id, True, pid)
 
-            # Add user message
-            storage.add_user_message(conversation_id, req.content, pid)
+            # Add user message (with idempotency check to prevent duplicates on retry)
+            # Check if last message is already this exact user message
+            last_msg = conversation["messages"][-1] if conversation["messages"] else None
+            is_duplicate = (
+                last_msg
+                and last_msg.get("role") == "user"
+                and last_msg.get("content") == req.content
+            )
+
+            if not is_duplicate:
+                storage.add_user_message(conversation_id, req.content, pid)
+            else:
+                print(f"[INFO] Skipping duplicate user message for conversation {conversation_id}")
 
             # Start title generation in parallel (don't await yet)
             title_task = None
@@ -441,6 +507,16 @@ async def send_message_stream(
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             stage1_results = await stage1_collect_responses(req.content)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
+            # Save partial state after stage1
+            storage.save_partial_assistant_message(conversation_id, "stage1", stage1_results, profile_id=pid)
+
+            # Check heartbeat and send if needed
+            heartbeat_event = check_and_send_heartbeat()
+            if heartbeat_event:
+                event_type, event_data = heartbeat_event
+                yield f"data: {json.dumps(event_data)}\n\n"
+                if event_type == 'auth_expired':
+                    return  # Stop stream if auth expired
 
             # Stage 1.5: Cross-interrogation (questions)
             yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
@@ -451,17 +527,48 @@ async def send_message_stream(
             yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
             answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
             yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
+            # Save partial state after stage1_5
+            stage1_5_data = {
+                'questions': questions_results,
+                'answers': answers_results,
+                'label_to_model': label_to_model_interrogation
+            }
+            storage.save_partial_assistant_message(conversation_id, "stage1_5", stage1_5_data, profile_id=pid)
+
+            # Check heartbeat and send if needed
+            heartbeat_event = check_and_send_heartbeat()
+            if heartbeat_event:
+                event_type, event_data = heartbeat_event
+                yield f"data: {json.dumps(event_data)}\n\n"
+                if event_type == 'auth_expired':
+                    return
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            # Save partial state after stage2 (with metadata)
+            metadata = {
+                'label_to_model': label_to_model,
+                'aggregate_rankings': aggregate_rankings
+            }
+            storage.save_partial_assistant_message(conversation_id, "stage2", stage2_results, metadata=metadata, profile_id=pid)
+
+            # Check heartbeat and send if needed
+            heartbeat_event = check_and_send_heartbeat()
+            if heartbeat_event:
+                event_type, event_data = heartbeat_event
+                yield f"data: {json.dumps(event_data)}\n\n"
+                if event_type == 'auth_expired':
+                    return
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
             stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+            # Save partial state after stage3 (marks as complete)
+            storage.save_partial_assistant_message(conversation_id, "stage3", stage3_result, profile_id=pid)
 
             # Wait for title generation if it was started
             if title_task:
@@ -469,25 +576,8 @@ async def send_message_stream(
                 storage.update_conversation_title(conversation_id, title, pid)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-            # Save complete assistant message with metadata and stage1_5
-            metadata = {
-                'label_to_model': label_to_model,
-                'aggregate_rankings': aggregate_rankings
-            }
-            stage1_5_data = {
-                'questions': questions_results,
-                'answers': answers_results,
-                'label_to_model': label_to_model_interrogation
-            }
-            storage.add_assistant_message(
-                conversation_id,
-                stage1_results,
-                stage2_results,
-                stage3_result,
-                metadata,
-                stage1_5_data,
-                pid
-            )
+            # Note: Assistant message already saved incrementally via save_partial_assistant_message()
+            # after each stage. No need to call add_assistant_message() here.
 
             # Set loading state to false
             storage.set_conversation_loading(conversation_id, False, pid)
@@ -798,7 +888,7 @@ async def logout(req: RefreshTokenRequest, request: Request):
 
 
 @app.get("/api/auth/me")
-async def get_current_user(user: Dict[str, Any] = Depends(get_current_user_required)):
+async def get_current_user(user: Dict[str, Any] = Depends(ensure_user_logged_in)):
     """Get current authenticated user."""
     return {"user": user}
 
