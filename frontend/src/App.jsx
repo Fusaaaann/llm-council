@@ -332,7 +332,8 @@ function App() {
   const handleRetryMessage = async (content) => {
     if (!currentConversationId || isLoading) return;
 
-    // Remove the last assistant response (if any)
+    // Remove the assistant response (completed or incomplete)
+    // The backend will also remove it and create a fresh one
     setCurrentConversation((prev) => {
       const messages = [...prev.messages];
       if (messages[messages.length - 1]?.role === 'assistant') {
@@ -380,26 +381,31 @@ function App() {
       }
 
       // Create a partial assistant message that will be updated progressively
-      const assistantMessage = {
-        role: 'assistant',
-        stage1: null,
-        stage1_5: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        loading: {
-          stage1: false,
-          stage1_5: false,
-          stage2: false,
-          stage3: false,
-        },
-      };
+      // (unless retrying, in which case we already removed the old one and will create fresh)
+      if (!skipAddingUserMessage) {
+        const assistantMessage = {
+          role: 'assistant',
+          stage1: null,
+          stage1_5: null,
+          stage2: null,
+          stage3: null,
+          metadata: null,
+          loading: {
+            stage1: true,  // Start with stage1 loading immediately
+            stage1_5: false,
+            stage2: false,
+            stage3: false,
+          },
+        };
 
-      // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...(prev?.messages || []), assistantMessage],
-      }));
+        // Add the partial assistant message
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [...(prev?.messages || []), assistantMessage],
+        }));
+      }
+      // If retrying (skipAddingUserMessage=true), don't create assistant message yet
+      // Backend will create it via save_partial_assistant_message() and we'll get it via events
 
       // Send message with streaming and reconnection handler
       await api.sendMessageStream(
@@ -412,13 +418,27 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                loading: {
-                  ...lastMsg.loading,
-                  stage1: true
-                }
-              };
+
+              // If last message is not assistant (retry scenario), create it
+              if (!lastMsg || lastMsg.role !== 'assistant') {
+                messages.push({
+                  role: 'assistant',
+                  stage1: null,
+                  stage1_5: null,
+                  stage2: null,
+                  stage3: null,
+                  metadata: null,
+                  loading: { stage1: true, stage1_5: false, stage2: false, stage3: false }
+                });
+              } else {
+                messages[messages.length - 1] = {
+                  ...lastMsg,
+                  loading: {
+                    ...lastMsg.loading,
+                    stage1: true
+                  }
+                };
+              }
               return { ...prev, messages };
             });
             break;

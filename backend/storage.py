@@ -320,6 +320,25 @@ def add_assistant_message(
     save_conversation(conversation)
 
 
+def remove_last_assistant_message(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID):
+    """
+    Remove the last assistant message from a conversation (used for retry).
+
+    Args:
+        conversation_id: Conversation identifier
+        profile_id: Profile identifier
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    messages = conversation["messages"]
+    if messages and messages[-1].get("role") == "assistant":
+        messages.pop()
+        save_conversation(conversation)
+        print(f"[INFO] Removed last assistant message for retry in conversation {conversation_id}")
+
+
 def save_partial_assistant_message(
     conversation_id: str,
     stage_name: str,
@@ -364,6 +383,10 @@ def save_partial_assistant_message(
         }
         messages.append(partial_message)
         last_message = partial_message
+    elif last_message.get("role") == "assistant":
+        # Update existing assistant message (resume scenario)
+        # This handles stream resumption after network drops
+        print(f"[INFO] Updating existing assistant message for conversation {conversation_id}")
 
     # Update the stage data
     if last_message.get("role") == "assistant":

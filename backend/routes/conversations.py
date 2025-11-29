@@ -466,10 +466,25 @@ async def send_message_stream(
                     and last_msg.get("content") == req.content
                 )
 
+                # Check if there's an assistant message before the duplicate user message
+                # This indicates a retry scenario where we need to remove the old response
+                is_retry = False
+                if is_duplicate and len(conversation["messages"]) >= 2:
+                    second_last = conversation["messages"][-2]
+                    if second_last.get("role") == "assistant":
+                        is_retry = True
+
                 if not is_duplicate:
                     storage.add_user_message(conversation_id, req.content, pid)
                 else:
                     print(f"[INFO] Skipping duplicate user message for conversation {conversation_id}")
+                    if is_retry:
+                        # Remove the previous assistant response before retrying
+                        print(f"[INFO] Retry detected, removing previous assistant response")
+                        # Need to temporarily remove user message, remove assistant, then restore user
+                        conversation["messages"].pop()  # Remove user
+                        storage.remove_last_assistant_message(conversation_id, pid)
+                        storage.add_user_message(conversation_id, req.content, pid)
 
                 # Start title generation in parallel (don't await yet)
                 title_task = None
