@@ -116,51 +116,51 @@ export default function ChatInterface({
                   <div className="message-label">LLM Council</div>
 
                   {/* Stage 1 */}
-                  {msg.loading?.stage1 && (
+                  {msg.stage1 ? (
+                    <Stage1 responses={msg.stage1} />
+                  ) : msg.loading?.stage1 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Running Stage 1: Collecting individual responses...</span>
                     </div>
                   )}
-                  {msg.stage1 && <Stage1 responses={msg.stage1} />}
 
                   {/* Stage 1.5 */}
-                  {msg.loading?.stage1_5 && (
+                  {msg.stage1_5 ? (
+                    <Stage1_5
+                      interrogationData={msg.stage1_5}
+                      labelToModel={msg.stage1_5?.label_to_model}
+                    />
+                  ) : msg.loading?.stage1_5 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Running Stage 1.5: Cross-interrogation...</span>
                     </div>
                   )}
-                  {msg.stage1_5 && (
-                    <Stage1_5
-                      interrogationData={msg.stage1_5}
-                      labelToModel={msg.stage1_5?.label_to_model}
-                    />
-                  )}
 
                   {/* Stage 2 */}
-                  {msg.loading?.stage2 && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 2: Peer rankings...</span>
-                    </div>
-                  )}
-                  {msg.stage2 && (
+                  {msg.stage2 ? (
                     <Stage2
                       rankings={msg.stage2}
                       labelToModel={msg.metadata?.label_to_model}
                       aggregateRankings={msg.metadata?.aggregate_rankings}
                     />
+                  ) : msg.loading?.stage2 && (
+                    <div className="stage-loading">
+                      <div className="spinner"></div>
+                      <span>Running Stage 2: Peer rankings...</span>
+                    </div>
                   )}
 
                   {/* Stage 3 */}
-                  {msg.loading?.stage3 && (
+                  {msg.stage3 ? (
+                    <Stage3 finalResponse={msg.stage3} />
+                  ) : msg.loading?.stage3 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Running Stage 3: Final synthesis...</span>
                     </div>
                   )}
-                  {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
                 </div>
               )}
             </div>

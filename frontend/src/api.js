@@ -194,12 +194,13 @@ export const api = {
   // ==================== Conversations ====================
 
   /**
-   * List all conversations.
+   * List conversations with optional view filtering.
+   * @param {string} view - View mode: "private" (own), "public" (all public), "all" (both)
    */
-  async listConversations() {
+  async listConversations(view = 'private') {
     const profileId = getCurrentProfileId();
     const response = await fetchWithAuth(
-      `${API_BASE}/api/conversations?profile_id=${profileId}`
+      `${API_BASE}/api/conversations?profile_id=${profileId}&view=${view}`
     );
     if (!response.ok) {
       throw new Error('Failed to list conversations');

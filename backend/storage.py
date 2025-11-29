@@ -179,53 +179,70 @@ def save_conversation(conversation: Dict[str, Any], profile_id: str = None):
         json.dump(data_to_save, f, indent=2)
 
 
-def list_conversations(profile_id: str = DEFAULT_PROFILE_ID) -> List[Dict[str, Any]]:
+def list_conversations(profile_id: str = DEFAULT_PROFILE_ID, view: str = "private") -> List[Dict[str, Any]]:
     """
-    List all conversations for a profile (metadata only).
+    List conversations with optional view filtering.
 
     Args:
         profile_id: Profile identifier
+        view: View mode - "private" (user's own), "public" (all public), "all" (both)
 
     Returns:
         List of conversation metadata dicts
     """
     ensure_data_dir()
 
+    if view == "public":
+        # Return all public conversations across all profiles
+        return list_public_conversations()
+
+    # Get user's own conversations
     conversations = []
     profile_dir = get_profile_dir(profile_id)
 
-    if not os.path.exists(profile_dir):
-        return conversations
+    if os.path.exists(profile_dir):
+        for filename in os.listdir(profile_dir):
+            if filename.endswith('.json'):
+                path = os.path.join(profile_dir, filename)
+                with open(path, 'r') as f:
+                    data = json.load(f)
 
-    for filename in os.listdir(profile_dir):
-        if filename.endswith('.json'):
-            path = os.path.join(profile_dir, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
+                    # Get message count (handles both encrypted and unencrypted)
+                    if "messages" in data:
+                        message_count = len(data["messages"])
+                    elif "messages_encrypted" in data:
+                        # For encrypted data, we need to decrypt to count
+                        # But for performance, we can skip this and show "?" or fetch full conversation
+                        # For now, we'll get the full conversation which will decrypt
+                        full_conv = get_conversation(data["id"], profile_id)
+                        message_count = len(full_conv.get("messages", []))
+                    else:
+                        message_count = 0
 
-                # Get message count (handles both encrypted and unencrypted)
-                if "messages" in data:
-                    message_count = len(data["messages"])
-                elif "messages_encrypted" in data:
-                    # For encrypted data, we need to decrypt to count
-                    # But for performance, we can skip this and show "?" or fetch full conversation
-                    # For now, we'll get the full conversation which will decrypt
-                    full_conv = get_conversation(data["id"], profile_id)
-                    message_count = len(full_conv.get("messages", []))
-                else:
-                    message_count = 0
+                    # Return metadata only
+                    conversations.append({
+                        "id": data["id"],
+                        "profile_id": profile_id,
+                        "created_at": data["created_at"],
+                        "title": data.get("title", "New Conversation"),
+                        "message_count": message_count,
+                        "is_loading": data.get("is_loading", False),
+                        "is_public": data.get("is_public", False),
+                        "sync_status": data.get("sync_status", "local"),
+                        "uses_byok": data.get("uses_byok", False)
+                    })
 
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": message_count,
-                    "is_loading": data.get("is_loading", False),
-                    "is_public": data.get("is_public", False),
-                    "sync_status": data.get("sync_status", "local"),
-                    "uses_byok": data.get("uses_byok", False)
-                })
+    if view == "all":
+        # Merge user's conversations with all public conversations
+        public_convs = list_public_conversations()
+
+        # Create a set of conversation IDs we already have
+        existing_ids = {c["id"] for c in conversations}
+
+        # Add public conversations that aren't already in the list
+        for pub_conv in public_convs:
+            if pub_conv["id"] not in existing_ids:
+                conversations.append(pub_conv)
 
     # Sort by creation time, newest first
     conversations.sort(key=lambda x: x["created_at"], reverse=True)

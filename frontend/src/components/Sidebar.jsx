@@ -15,6 +15,8 @@ export default function Sidebar({
   onLogin,
   onLogout,
   onAbout,
+  currentView,
+  onViewChange,
 }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -101,9 +103,11 @@ export default function Sidebar({
             ℹ️
           </button>
         </div>
-        <button className="new-conversation-btn" onClick={onNewConversation}>
-          + New Conversation
-        </button>
+        {currentView === 'private' && (
+          <button className="new-conversation-btn" onClick={onNewConversation}>
+            + New Conversation
+          </button>
+        )}
       </div>
 
       {/* Auth section */}
@@ -120,6 +124,22 @@ export default function Sidebar({
             Login / Register
           </button>
         )}
+      </div>
+
+      {/* View toggle */}
+      <div className="view-toggle">
+        <button
+          className={`view-btn ${currentView === 'private' ? 'active' : ''}`}
+          onClick={() => onViewChange('private')}
+        >
+          My Conversations
+        </button>
+        <button
+          className={`view-btn ${currentView === 'public' ? 'active' : ''}`}
+          onClick={() => onViewChange('public')}
+        >
+          Public Forum
+        </button>
       </div>
 
       <div className="conversation-list">
@@ -173,13 +193,15 @@ export default function Sidebar({
                         {conv.message_count} messages
                       </div>
                     </div>
-                    <button
-                      className="menu-button"
-                      onClick={(e) => handleMenuToggle(conv.id, e)}
-                    >
-                      ⋮
-                    </button>
-                    {openMenuId === conv.id && (
+                    {currentView === 'private' && (
+                      <button
+                        className="menu-button"
+                        onClick={(e) => handleMenuToggle(conv.id, e)}
+                      >
+                        ⋮
+                      </button>
+                    )}
+                    {openMenuId === conv.id && currentView === 'private' && (
                       <div className="conversation-menu">
                         <button onClick={(e) => handleRename(conv, e)}>
                           ✏️ Rename

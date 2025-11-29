@@ -120,6 +120,39 @@
   border-color: #357abd;
 }
 
+/* View toggle */
+.view-toggle {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f9f9f9;
+}
+
+.view-btn {
+  flex: 1;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #666;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.view-btn:hover {
+  background: #f5f5f5;
+  border-color: #ccc;
+}
+
+.view-btn.active {
+  background: #4a90e2;
+  color: white;
+  border-color: #4a90e2;
+}
+
 .conversation-list {
   flex: 1;
   overflow-y: auto;

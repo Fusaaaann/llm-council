@@ -20,9 +20,16 @@ export function initialize() {
 
 /**
  * Get all conversations (from localStorage).
+ * @param {string} view - Optional view mode: "private" (own), "public" (all public), "all" (both)
  */
-export function getAllConversations() {
-  return localStore.getConversationMetadata();
+export async function getAllConversations(view = 'private') {
+  if (view === 'private') {
+    // Return local conversations only
+    return localStore.getConversationMetadata();
+  } else {
+    // For public/all views, fetch from backend API
+    return await api.listConversations(view);
+  }
 }
 
 /**
@@ -152,17 +159,11 @@ export async function unpublishConversation(conversationId) {
 }
 
 /**
- * List public conversations from forum (backend only).
+ * Get a public conversation (checks backend for public conversations).
+ * For reading public conversations that may not be in localStorage.
  */
-export async function listForumConversations() {
-  return await api.listForumConversations();
-}
-
-/**
- * Get a public conversation from forum (backend only).
- */
-export async function getForumConversation(conversationId, profileId) {
-  return await api.getForumConversation(conversationId, profileId);
+export async function getPublicConversation(conversationId, profileId) {
+  return await api.getConversation(conversationId, profileId);
 }
 
 /**

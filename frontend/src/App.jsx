@@ -18,6 +18,7 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [inviteToken, setInviteToken] = useState(null);
+  const [currentView, setCurrentView] = useState('private');
 
   // Check for invite token in URL on mount
   useEffect(() => {
@@ -38,10 +39,10 @@ function App() {
     }
   }, []);
 
-  // Load conversations on mount
+  // Load conversations on mount and when view changes
   useEffect(() => {
     loadConversations();
-  }, []);
+  }, [currentView]);
 
   // Smart polling for conversation loading states
   useEffect(() => {
@@ -139,11 +140,18 @@ function App() {
 
   const loadConversations = async () => {
     try {
-      const convs = await api.listConversations();
+      const convs = await api.listConversations(currentView);
       setConversations(convs);
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
+  };
+
+  const handleViewChange = (view) => {
+    setCurrentView(view);
+    // Clear current conversation when switching views
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   const loadConversation = async (id) => {
@@ -478,6 +486,9 @@ function App() {
               lastMsg.loading.stage3 = false;
               return { ...prev, messages };
             });
+            // Clear loading state immediately after stage3 completes
+            // Don't wait for 'complete' event which may be delayed
+            setIsLoading(false);
             break;
 
           case 'title_complete':
@@ -572,6 +583,8 @@ function App() {
         onLogin={() => setShowAuthModal(true)}
         onLogout={handleLogout}
         onAbout={() => setShowAboutModal(true)}
+        currentView={currentView}
+        onViewChange={handleViewChange}
       />
       <ChatInterface
         conversation={currentConversation}

@@ -162,11 +162,23 @@ async def update_models(req: ModelConfigRequest):
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
 async def list_conversations(
     profile_id: Optional[str] = Query(None),
+    view: str = Query("private", description="View mode: private (own), public (all public), all (both)"),
     user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
-    """List all conversations for a profile (metadata only)."""
+    """
+    List conversations with optional view filtering.
+
+    - view=private: User's own conversations (default, requires profile ownership)
+    - view=public: All public conversations (no auth required)
+    - view=all: User's conversations + all public conversations
+    """
+    # For public view, no profile access check needed
+    if view == "public":
+        return storage.list_conversations(profile_id="default", view="public")
+
+    # For private/all views, validate profile access
     pid = get_profile_id_for_request(user, profile_id)
-    return storage.list_conversations(pid)
+    return storage.list_conversations(pid, view)
 
 
 @app.post("/api/conversations", response_model=Conversation)
@@ -480,109 +492,111 @@ async def send_message_stream(
             # Set loading state to true
             storage.set_conversation_loading(conversation_id, True, pid)
 
-            # Add user message (with idempotency check to prevent duplicates on retry)
-            # Check if last message is already this exact user message
-            last_msg = conversation["messages"][-1] if conversation["messages"] else None
-            is_duplicate = (
-                last_msg
-                and last_msg.get("role") == "user"
-                and last_msg.get("content") == req.content
-            )
+            try:
+                # Add user message (with idempotency check to prevent duplicates on retry)
+                # Check if last message is already this exact user message
+                last_msg = conversation["messages"][-1] if conversation["messages"] else None
+                is_duplicate = (
+                    last_msg
+                    and last_msg.get("role") == "user"
+                    and last_msg.get("content") == req.content
+                )
 
-            if not is_duplicate:
-                storage.add_user_message(conversation_id, req.content, pid)
-            else:
-                print(f"[INFO] Skipping duplicate user message for conversation {conversation_id}")
+                if not is_duplicate:
+                    storage.add_user_message(conversation_id, req.content, pid)
+                else:
+                    print(f"[INFO] Skipping duplicate user message for conversation {conversation_id}")
 
-            # Start title generation in parallel (don't await yet)
-            title_task = None
-            if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(req.content))
+                # Start title generation in parallel (don't await yet)
+                title_task = None
+                if is_first_message:
+                    title_task = asyncio.create_task(generate_conversation_title(req.content))
 
-            # Stage 1: Collect responses
-            yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(req.content)
-            yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
-            # Save partial state after stage1
-            storage.save_partial_assistant_message(conversation_id, "stage1", stage1_results, profile_id=pid)
+                # Stage 1: Collect responses
+                yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
+                stage1_results = await stage1_collect_responses(req.content)
+                yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
+                # Save partial state after stage1
+                storage.save_partial_assistant_message(conversation_id, "stage1", stage1_results, profile_id=pid)
 
-            # Check heartbeat and send if needed
-            heartbeat_event = check_and_send_heartbeat()
-            if heartbeat_event:
-                event_type, event_data = heartbeat_event
-                yield f"data: {json.dumps(event_data)}\n\n"
-                if event_type == 'auth_expired':
-                    return  # Stop stream if auth expired
+                # Check heartbeat and send if needed
+                heartbeat_event = check_and_send_heartbeat()
+                if heartbeat_event:
+                    event_type, event_data = heartbeat_event
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    if event_type == 'auth_expired':
+                        return  # Stop stream if auth expired
 
-            # Stage 1.5: Cross-interrogation (questions)
-            yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
-            questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
-            yield f"data: {json.dumps({'type': 'stage1_5_questions_complete', 'data': questions_results})}\n\n"
+                # Stage 1.5: Cross-interrogation (questions)
+                yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
+                questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
+                yield f"data: {json.dumps({'type': 'stage1_5_questions_complete', 'data': questions_results})}\n\n"
 
-            # Stage 1.5: Collect answers
-            yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
-            answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
-            yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
-            # Save partial state after stage1_5
-            stage1_5_data = {
-                'questions': questions_results,
-                'answers': answers_results,
-                'label_to_model': label_to_model_interrogation
-            }
-            storage.save_partial_assistant_message(conversation_id, "stage1_5", stage1_5_data, profile_id=pid)
+                # Stage 1.5: Collect answers
+                yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
+                answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
+                yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
+                # Save partial state after stage1_5
+                stage1_5_data = {
+                    'questions': questions_results,
+                    'answers': answers_results,
+                    'label_to_model': label_to_model_interrogation
+                }
+                storage.save_partial_assistant_message(conversation_id, "stage1_5", stage1_5_data, profile_id=pid)
 
-            # Check heartbeat and send if needed
-            heartbeat_event = check_and_send_heartbeat()
-            if heartbeat_event:
-                event_type, event_data = heartbeat_event
-                yield f"data: {json.dumps(event_data)}\n\n"
-                if event_type == 'auth_expired':
-                    return
+                # Check heartbeat and send if needed
+                heartbeat_event = check_and_send_heartbeat()
+                if heartbeat_event:
+                    event_type, event_data = heartbeat_event
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    if event_type == 'auth_expired':
+                        return
 
-            # Stage 2: Collect rankings
-            yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
-            aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
-            # Save partial state after stage2 (with metadata)
-            metadata = {
-                'label_to_model': label_to_model,
-                'aggregate_rankings': aggregate_rankings
-            }
-            storage.save_partial_assistant_message(conversation_id, "stage2", stage2_results, metadata=metadata, profile_id=pid)
+                # Stage 2: Collect rankings
+                yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+                stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
+                aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+                # Save partial state after stage2 (with metadata)
+                metadata = {
+                    'label_to_model': label_to_model,
+                    'aggregate_rankings': aggregate_rankings
+                }
+                storage.save_partial_assistant_message(conversation_id, "stage2", stage2_results, metadata=metadata, profile_id=pid)
 
-            # Check heartbeat and send if needed
-            heartbeat_event = check_and_send_heartbeat()
-            if heartbeat_event:
-                event_type, event_data = heartbeat_event
-                yield f"data: {json.dumps(event_data)}\n\n"
-                if event_type == 'auth_expired':
-                    return
+                # Check heartbeat and send if needed
+                heartbeat_event = check_and_send_heartbeat()
+                if heartbeat_event:
+                    event_type, event_data = heartbeat_event
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    if event_type == 'auth_expired':
+                        return
 
-            # Stage 3: Synthesize final answer
-            yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
-            yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
-            # Save partial state after stage3 (marks as complete)
-            storage.save_partial_assistant_message(conversation_id, "stage3", stage3_result, profile_id=pid)
+                # Stage 3: Synthesize final answer
+                yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                # Save partial state after stage3 (marks as complete)
+                storage.save_partial_assistant_message(conversation_id, "stage3", stage3_result, profile_id=pid)
 
-            # Wait for title generation if it was started
-            if title_task:
-                title = await title_task
-                storage.update_conversation_title(conversation_id, title, pid)
-                yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+                # Wait for title generation if it was started
+                if title_task:
+                    title = await title_task
+                    storage.update_conversation_title(conversation_id, title, pid)
+                    yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-            # Note: Assistant message already saved incrementally via save_partial_assistant_message()
-            # after each stage. No need to call add_assistant_message() here.
+                # Note: Assistant message already saved incrementally via save_partial_assistant_message()
+                # after each stage. No need to call add_assistant_message() here.
 
-            # Set loading state to false
-            storage.set_conversation_loading(conversation_id, False, pid)
+                # Send completion event
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
-            # Send completion event
-            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+            finally:
+                # Always clear loading state, even if errors occurred
+                storage.set_conversation_loading(conversation_id, False, pid)
 
         except Exception as e:
-            # Set loading state to false on error
+            # Set loading state to false on error (in case finally block didn't run)
             storage.set_conversation_loading(conversation_id, False, pid)
 
             # Send error event
