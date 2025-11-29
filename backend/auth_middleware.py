@@ -81,13 +81,13 @@ async def get_current_user_optional(
 
 
 async def ensure_user_logged_in(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Dict[str, Any]:
     """
-    Get current user from JWT token (required).
+    Get current user from JWT token (required in production, optional in local).
 
-    Always raises 401 if no token or invalid token.
-    This is a convenience wrapper around get_current_user_optional(required=True).
+    In production mode: Always raises 401 if no token or invalid token.
+    In local mode: Returns a default user if no authentication provided.
 
     Args:
         credentials: Bearer token from Authorization header
@@ -96,8 +96,19 @@ async def ensure_user_logged_in(
         User data dict
 
     Raises:
-        HTTPException: 401 if authentication fails
+        HTTPException: 401 if authentication fails (production mode only)
     """
+    # In local mode without credentials, return a default user
+    if ENVIRONMENT == "local" and not credentials:
+        from .config import DEFAULT_PROFILE_ID
+        return {
+            "id": "default_user",
+            "email": "local@localhost",
+            "name": "Local User",
+            "profile_id": DEFAULT_PROFILE_ID,
+            "default_profile_id": DEFAULT_PROFILE_ID
+        }
+
     return await get_current_user_optional(credentials=credentials, required=True)
 
 
