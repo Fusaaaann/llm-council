@@ -22,6 +22,7 @@ from ..auth_middleware import get_current_user_optional, get_profile_id_for_requ
 from ..models import (
     CreateConversationRequest,
     SendMessageRequest,
+    ResumeStreamRequest,
     RenameConversationRequest,
     Conversation,
     ConversationMetadata
@@ -391,6 +392,24 @@ async def send_message_stream(
             # Generate connection token for this streaming session
             stream_id = str(uuid.uuid4())
             connection_token = None
+            event_sequence = [0]  # Track event sequence for IDs
+
+            def generate_event_id(stage: str) -> str:
+                """Generate unique event ID: {stream_id}-{stage}-{sequence}"""
+                event_id = f"{stream_id}-{stage}-{event_sequence[0]}"
+                event_sequence[0] += 1
+                return event_id
+
+            def send_event(event_type: str, data: Any = None, stage: str = None) -> str:
+                """Helper to send SSE event with ID"""
+                event_id = generate_event_id(stage or event_type)
+                event_data = {'type': event_type}
+                if data is not None:
+                    if isinstance(data, dict):
+                        event_data.update(data)
+                    else:
+                        event_data['data'] = data
+                return f"id: {event_id}\ndata: {json.dumps(event_data)}\n\n"
 
             # Only generate connection token if user is authenticated
             if user:
@@ -401,7 +420,7 @@ async def send_message_stream(
                 )
 
             # Send stream initialization event with connection token
-            yield f"data: {json.dumps({'type': 'stream_init', 'stream_id': stream_id, 'connection_token': connection_token})}\n\n"
+            yield send_event('stream_init', {'stream_id': stream_id, 'connection_token': connection_token}, 'init')
 
             # Heartbeat tracking
             last_heartbeat = [time.time()]  # Use list for mutability in nested function
@@ -423,18 +442,14 @@ async def send_message_stream(
 
                         if not user_sessions:
                             # User logged out elsewhere - send auth_expired event
-                            return ('auth_expired', {
-                                'type': 'auth_expired',
+                            return send_event('auth_expired', {
                                 'reason': 'logged_out',
                                 'message': 'Session ended. Please log in again.'
-                            })
+                            }, 'heartbeat')
 
                     # Send heartbeat
                     last_heartbeat[0] = now
-                    return ('heartbeat', {
-                        'type': 'heartbeat',
-                        'timestamp': now
-                    })
+                    return send_event('heartbeat', {'timestamp': now}, 'heartbeat')
 
                 return None  # No heartbeat needed
 
@@ -462,83 +477,101 @@ async def send_message_stream(
                     title_task = asyncio.create_task(generate_conversation_title(req.content))
 
                 # Stage 1: Collect responses
-                yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
+                yield send_event('stage1_start', stage='stage1')
                 stage1_results = await stage1_collect_responses(req.content)
-                yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
-                # Save partial state after stage1
-                storage.save_partial_assistant_message(conversation_id, "stage1", stage1_results, profile_id=pid)
+                yield send_event('stage1_complete', stage1_results, 'stage1')
+                # Save partial state after stage1 with stream metadata
+                storage.save_partial_assistant_message(
+                    conversation_id, "stage1", stage1_results,
+                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                )
 
                 # Check heartbeat and send if needed
                 heartbeat_event = check_and_send_heartbeat()
                 if heartbeat_event:
-                    event_type, event_data = heartbeat_event
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    if event_type == 'auth_expired':
+                    yield heartbeat_event
+                    if 'auth_expired' in heartbeat_event:
                         return  # Stop stream if auth expired
 
                 # Stage 1.5: Cross-interrogation (questions)
-                yield f"data: {json.dumps({'type': 'stage1_5_questions_start'})}\n\n"
+                yield send_event('stage1_5_questions_start', stage='stage1_5')
                 questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
-                yield f"data: {json.dumps({'type': 'stage1_5_questions_complete', 'data': questions_results})}\n\n"
+                yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
 
                 # Stage 1.5: Collect answers
-                yield f"data: {json.dumps({'type': 'stage1_5_answers_start'})}\n\n"
+                yield send_event('stage1_5_answers_start', stage='stage1_5')
                 answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
-                yield f"data: {json.dumps({'type': 'stage1_5_answers_complete', 'data': answers_results, 'label_to_model': label_to_model_interrogation})}\n\n"
-                # Save partial state after stage1_5
+                yield send_event('stage1_5_answers_complete', {
+                    'data': answers_results,
+                    'label_to_model': label_to_model_interrogation
+                }, 'stage1_5')
+                # Save partial state after stage1_5 with stream metadata
                 stage1_5_data = {
                     'questions': questions_results,
                     'answers': answers_results,
                     'label_to_model': label_to_model_interrogation
                 }
-                storage.save_partial_assistant_message(conversation_id, "stage1_5", stage1_5_data, profile_id=pid)
+                storage.save_partial_assistant_message(
+                    conversation_id, "stage1_5", stage1_5_data,
+                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                )
 
                 # Check heartbeat and send if needed
                 heartbeat_event = check_and_send_heartbeat()
                 if heartbeat_event:
-                    event_type, event_data = heartbeat_event
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    if event_type == 'auth_expired':
+                    yield heartbeat_event
+                    if 'auth_expired' in heartbeat_event:
                         return
 
                 # Stage 2: Collect rankings
-                yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+                yield send_event('stage2_start', stage='stage2')
                 stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+                yield send_event('stage2_complete', {
+                    'data': stage2_results,
+                    'metadata': {
+                        'label_to_model': label_to_model,
+                        'aggregate_rankings': aggregate_rankings
+                    }
+                }, 'stage2')
                 # Save partial state after stage2 (with metadata)
                 metadata = {
                     'label_to_model': label_to_model,
                     'aggregate_rankings': aggregate_rankings
                 }
-                storage.save_partial_assistant_message(conversation_id, "stage2", stage2_results, metadata=metadata, profile_id=pid)
+                storage.save_partial_assistant_message(
+                    conversation_id, "stage2", stage2_results, metadata=metadata,
+                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                )
 
                 # Check heartbeat and send if needed
                 heartbeat_event = check_and_send_heartbeat()
                 if heartbeat_event:
-                    event_type, event_data = heartbeat_event
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    if event_type == 'auth_expired':
+                    yield heartbeat_event
+                    if 'auth_expired' in heartbeat_event:
                         return
 
                 # Stage 3: Synthesize final answer
-                yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                yield send_event('stage3_start', stage='stage3')
                 stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
-                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
-                # Save partial state after stage3 (marks as complete)
-                storage.save_partial_assistant_message(conversation_id, "stage3", stage3_result, profile_id=pid)
+                yield send_event('stage3_complete', stage3_result, 'stage3')
+                # Save partial state after stage3 (marks as complete, clears stream metadata)
+                storage.save_partial_assistant_message(
+                    conversation_id, "stage3", stage3_result,
+                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                )
 
                 # Wait for title generation if it was started
                 if title_task:
                     title = await title_task
                     storage.update_conversation_title(conversation_id, title, pid)
-                    yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+                    yield send_event('title_complete', {'title': title}, 'title')
 
                 # Note: Assistant message already saved incrementally via save_partial_assistant_message()
                 # after each stage. No need to call add_assistant_message() here.
 
                 # Send completion event
-                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                yield send_event('complete', stage='complete')
 
             finally:
                 # Always clear loading state, even if errors occurred
@@ -548,11 +581,196 @@ async def send_message_stream(
             # Set loading state to false on error (in case finally block didn't run)
             storage.set_conversation_loading(conversation_id, False, pid)
 
-            # Send error event
+            # Send error event (without event ID since stream_id may not be initialized)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
         event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/{conversation_id}/message/stream/resume")
+@limiter.limit("10/minute")
+async def resume_message_stream(
+    request: Request,
+    conversation_id: str,
+    req: ResumeStreamRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Resume an interrupted message stream from the last completed stage.
+    Requires connection_token from original stream.
+    """
+    pid = get_profile_id_for_request(user, profile_id)
+
+    # Validate connection token
+    connection_token = req.connection_token
+
+    # Verify connection token
+    try:
+        token_data = auth.verify_connection_token(connection_token)
+        if not token_data:
+            raise HTTPException(status_code=401, detail="Invalid or expired connection token")
+
+        # Verify token belongs to this conversation
+        if token_data.get("conversation_id") != conversation_id:
+            raise HTTPException(status_code=403, detail="Connection token does not match conversation")
+
+        # Verify user ownership if authenticated
+        if user and token_data.get("user_id") != user["id"]:
+            raise HTTPException(status_code=403, detail="Connection token does not belong to current user")
+
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")
+
+    # Get stream metadata
+    stream_metadata = storage.get_stream_metadata(conversation_id, pid)
+    if not stream_metadata:
+        raise HTTPException(status_code=404, detail="No stream metadata found. Stream may have completed or expired.")
+
+    # Verify connection tokens match
+    if stream_metadata.get("connection_token") != connection_token:
+        raise HTTPException(status_code=403, detail="Connection token mismatch")
+
+    # Get conversation and last completed stage
+    conversation = storage.get_conversation(conversation_id, pid)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    last_stage = stream_metadata.get("last_stage")
+    stream_id = stream_metadata.get("stream_id")
+
+    # Determine which stages to resume from
+    stage_order = ["stage1", "stage1_5", "stage2", "stage3"]
+    try:
+        last_stage_index = stage_order.index(last_stage)
+        remaining_stages = stage_order[last_stage_index + 1:]
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid last_stage: {last_stage}")
+
+    if not remaining_stages:
+        # All stages completed, just return success
+        return {"success": True, "message": "Stream already completed"}
+
+    # Get the partial message
+    messages = conversation.get("messages", [])
+    if not messages or messages[-1].get("role") != "assistant":
+        raise HTTPException(status_code=400, detail="No partial assistant message found")
+
+    partial_message = messages[-1]
+    stage1_results = partial_message.get("stage1")
+    stage1_5_data = partial_message.get("stage1_5")
+    stage2_results = partial_message.get("stage2")
+
+    # Get user message content
+    user_message_content = ""
+    if len(messages) >= 2 and messages[-2].get("role") == "user":
+        user_message_content = messages[-2].get("content", "")
+
+    # Stream remaining stages
+    async def resume_generator():
+        try:
+            event_sequence = [0]
+
+            def generate_event_id(stage: str) -> str:
+                event_id = f"{stream_id}-resume-{stage}-{event_sequence[0]}"
+                event_sequence[0] += 1
+                return event_id
+
+            def send_event(event_type: str, data: Any = None, stage: str = None) -> str:
+                event_id = generate_event_id(stage or event_type)
+                event_data = {'type': event_type}
+                if data is not None:
+                    if isinstance(data, dict):
+                        event_data.update(data)
+                    else:
+                        event_data['data'] = data
+                return f"id: {event_id}\ndata: {json.dumps(event_data)}\n\n"
+
+            # Send resume initialization
+            yield send_event('resume_init', {
+                'stream_id': stream_id,
+                'last_stage': last_stage,
+                'remaining_stages': remaining_stages
+            }, 'resume')
+
+            # Resume from next stage
+            for stage in remaining_stages:
+                if stage == "stage1_5":
+                    # Stage 1.5: Cross-interrogation
+                    yield send_event('stage1_5_questions_start', stage='stage1_5')
+                    questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(
+                        user_message_content, stage1_results
+                    )
+                    yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
+
+                    yield send_event('stage1_5_answers_start', stage='stage1_5')
+                    answers_results = await stage1_5_collect_answers(
+                        user_message_content, stage1_results, questions_results, label_to_model_interrogation
+                    )
+                    yield send_event('stage1_5_answers_complete', {
+                        'data': answers_results,
+                        'label_to_model': label_to_model_interrogation
+                    }, 'stage1_5')
+
+                    stage1_5_data = {
+                        'questions': questions_results,
+                        'answers': answers_results,
+                        'label_to_model': label_to_model_interrogation
+                    }
+                    storage.save_partial_assistant_message(
+                        conversation_id, "stage1_5", stage1_5_data,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
+
+                elif stage == "stage2":
+                    # Stage 2: Rankings
+                    yield send_event('stage2_start', stage='stage2')
+                    stage2_results, label_to_model = await stage2_collect_rankings(user_message_content, stage1_results)
+                    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+                    yield send_event('stage2_complete', {
+                        'data': stage2_results,
+                        'metadata': {
+                            'label_to_model': label_to_model,
+                            'aggregate_rankings': aggregate_rankings
+                        }
+                    }, 'stage2')
+
+                    metadata = {
+                        'label_to_model': label_to_model,
+                        'aggregate_rankings': aggregate_rankings
+                    }
+                    storage.save_partial_assistant_message(
+                        conversation_id, "stage2", stage2_results, metadata=metadata,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
+
+                elif stage == "stage3":
+                    # Stage 3: Final synthesis
+                    yield send_event('stage3_start', stage='stage3')
+                    stage3_result = await stage3_synthesize_final(user_message_content, stage1_results, stage2_results)
+                    yield send_event('stage3_complete', stage3_result, 'stage3')
+                    storage.save_partial_assistant_message(
+                        conversation_id, "stage3", stage3_result,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
+
+            # Send completion
+            yield send_event('complete', stage='complete')
+            storage.set_conversation_loading(conversation_id, False, pid)
+
+        except Exception as e:
+            storage.set_conversation_loading(conversation_id, False, pid)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        resume_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

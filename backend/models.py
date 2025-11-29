@@ -14,6 +14,11 @@ class SendMessageRequest(BaseModel):
     content: str
 
 
+class ResumeStreamRequest(BaseModel):
+    """Request to resume an interrupted stream."""
+    connection_token: str
+
+
 class RenameConversationRequest(BaseModel):
     """Request to rename a conversation."""
     title: str

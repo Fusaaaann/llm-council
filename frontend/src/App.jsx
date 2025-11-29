@@ -19,6 +19,7 @@ function App() {
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [inviteToken, setInviteToken] = useState(null);
   const [currentView, setCurrentView] = useState('private');
+  const [reconnectionStatus, setReconnectionStatus] = useState(null); // { attempt, maxAttempts, delay }
 
   // Check for invite token in URL on mount
   useEffect(() => {
@@ -374,8 +375,12 @@ function App() {
         messages: [...(prev?.messages || []), assistantMessage],
       }));
 
-      // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, controller.signal, (eventType, event) => {
+      // Send message with streaming and reconnection handler
+      await api.sendMessageStream(
+        currentConversationId,
+        content,
+        controller.signal,
+        (eventType, event) => {
         switch (eventType) {
           case 'stage1_start':
             setCurrentConversation((prev) => {
@@ -519,11 +524,19 @@ function App() {
             console.log('[Stream] Heartbeat received at', new Date(event.timestamp * 1000));
             break;
 
+          case 'reconnected':
+            // Stream resumed after network interruption
+            console.log('[Stream] Reconnected! Resumed from stage:', event.last_stage);
+            setReconnectionStatus(null); // Clear reconnection status
+            // Continue processing remaining stages normally
+            break;
+
           case 'auth_expired':
             // Token expired or user logged out elsewhere during stream
             console.log('[Stream] Auth expired:', event.reason);
             setIsLoading(false);
             setAbortController(null);
+            setReconnectionStatus(null);
 
             if (event.reason === 'logged_out') {
               // User logged out elsewhere
@@ -554,6 +567,11 @@ function App() {
           default:
             console.log('Unknown event type:', eventType);
         }
+      },
+      // Reconnection callback
+      (attempt, maxAttempts, delay) => {
+        console.log(`[Stream] Reconnection attempt ${attempt}/${maxAttempts} in ${delay}ms`);
+        setReconnectionStatus({ attempt, maxAttempts, delay: Math.round(delay / 1000) });
       });
     } catch (error) {
       // Check if it was aborted
@@ -569,6 +587,7 @@ function App() {
       }
       setIsLoading(false);
       setAbortController(null);
+      setReconnectionStatus(null); // Clear reconnection status on error
     }
   };
 
@@ -591,21 +610,39 @@ function App() {
         currentView={currentView}
         onViewChange={handleViewChange}
       />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        onEditMessage={handleEditMessage}
-        onRetryMessage={handleRetryMessage}
-        onCancelMessage={handleCancelMessage}
-        onUpdateModels={handleUpdateModels}
-        isLoading={isLoading}
-        isReadOnly={
-          // Read-only if: viewing public forum AND conversation doesn't belong to current user
-          currentView === 'public' &&
-          currentConversation &&
-          currentConversation.profile_id !== localStorage.getItem(getProfileIdKey())
-        }
-      />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {reconnectionStatus && (
+          <div
+            style={{
+              backgroundColor: '#ff9800',
+              color: 'white',
+              padding: '10px 20px',
+              textAlign: 'center',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+              zIndex: 1000,
+            }}
+          >
+            ⚠️ Connection lost. Reconnecting in {reconnectionStatus.delay}s... (Attempt {reconnectionStatus.attempt}/{reconnectionStatus.maxAttempts})
+          </div>
+        )}
+        <ChatInterface
+          conversation={currentConversation}
+          onSendMessage={handleSendMessage}
+          onEditMessage={handleEditMessage}
+          onRetryMessage={handleRetryMessage}
+          onCancelMessage={handleCancelMessage}
+          onUpdateModels={handleUpdateModels}
+          isLoading={isLoading}
+          isReadOnly={
+            // Read-only if: viewing public forum AND conversation doesn't belong to current user
+            currentView === 'public' &&
+            currentConversation &&
+            currentConversation.profile_id !== localStorage.getItem(getProfileIdKey())
+          }
+        />
+      </div>
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}

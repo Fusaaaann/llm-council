@@ -259,95 +259,243 @@ export const api = {
   },
 
   /**
-   * Send a message and receive streaming updates.
+   * Send a message and receive streaming updates with automatic reconnection.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
    * @param {AbortSignal} signal - Abort signal for cancellation
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @param {function} onReconnect - Optional callback for reconnection attempts: (attempt, maxAttempts, delay) => void
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, signal, onEvent) {
+  async sendMessageStream(conversationId, content, signal, onEvent, onReconnect = null) {
     const profileId = getCurrentProfileId();
+    const MAX_RETRY_ATTEMPTS = 10;
+    const INITIAL_RETRY_DELAY = 1000; // 1 second
+    const MAX_RETRY_DELAY = 64000; // 64 seconds
 
-    // Connection token will be received in stream_init event
-    let connectionToken = null;
+    // Stream context for reconnection
+    let streamContext = {
+      connectionToken: null,
+      streamId: null,
+      lastEventId: null,
+      conversationId,
+      content,
+      profileId,
+      receivedComplete: false
+    };
 
-    // Enhanced event handler wrapper to capture connection token
-    const wrappedOnEvent = (eventType, event) => {
+    // Enhanced event handler wrapper to capture connection token and event IDs
+    const wrappedOnEvent = (eventType, event, eventId) => {
+      if (eventId) {
+        streamContext.lastEventId = eventId;
+      }
+
       if (eventType === 'stream_init') {
-        connectionToken = event.connection_token;
+        streamContext.connectionToken = event.connection_token;
+        streamContext.streamId = event.stream_id;
         console.log('[API] Connection token received for stream:', event.stream_id);
         // Don't pass stream_init to caller (internal event)
         return;
       }
+
+      if (eventType === 'complete') {
+        streamContext.receivedComplete = true;
+      }
+
       onEvent(eventType, event);
     };
 
-    // Start the stream with access token
-    let response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
+    // Exponential backoff retry logic
+    const attemptStream = async (retryAttempt = 0) => {
+      try {
+        // Start the stream with access token
+        let response = await fetch(
+          `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ content }),
+            signal: signal,
+          }
+        );
+
+        if (!response.ok) {
+          // Handle 401 specifically
+          if (response.status === 401) {
+            // Try to refresh access token once
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+              // Retry the stream with new access token
+              response = await fetch(
+                `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
+                {
+                  method: 'POST',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({ content }),
+                  signal: signal,
+                }
+              );
+              if (!response.ok) {
+                throw new Error('Failed to send message after token refresh');
+              }
+            } else {
+              clearAuth();
+              throw new Error('Authentication expired. Please log in again.');
+            }
+          } else {
+            throw new Error('Failed to send message');
+          }
+        }
+
+        // Read the stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // Stream ended - check if we received complete event
+            if (!streamContext.receivedComplete && streamContext.connectionToken) {
+              // Premature end - network error, attempt reconnection
+              throw new Error('Stream ended prematurely');
+            }
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+          let currentEventId = null;
+          for (const line of lines) {
+            if (line.startsWith('id: ')) {
+              currentEventId = line.slice(4);
+            } else if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              try {
+                const event = JSON.parse(data);
+                wrappedOnEvent(event.type, event, currentEventId);
+                currentEventId = null;
+              } catch (e) {
+                console.error('Failed to parse SSE event:', e);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Check if error is due to abort signal
+        if (signal?.aborted) {
+          console.log('[API] Stream aborted by user');
+          throw error;
+        }
+
+        // Check if we have connection token for resume
+        if (!streamContext.connectionToken || streamContext.receivedComplete) {
+          // No token or already complete, can't resume
+          throw error;
+        }
+
+        // Check if we've exceeded retry attempts
+        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
+          console.error('[API] Max retry attempts reached, falling back to conversation reload');
+          onEvent('error', {
+            message: 'Connection lost. Please reload the page to see completed stages.',
+            recoverable: false
+          });
+          throw error;
+        }
+
+        // Calculate exponential backoff delay
+        const delay = Math.min(INITIAL_RETRY_DELAY * Math.pow(2, retryAttempt), MAX_RETRY_DELAY);
+        console.log(`[API] Stream error, retrying in ${delay}ms (attempt ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})`);
+
+        // Notify caller about reconnection attempt
+        if (onReconnect) {
+          onReconnect(retryAttempt + 1, MAX_RETRY_ATTEMPTS, delay);
+        }
+
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        // Attempt to resume stream
+        try {
+          await this.resumeMessageStream(conversationId, streamContext.connectionToken, signal, onEvent);
+        } catch (resumeError) {
+          console.error('[API] Resume failed, retrying from scratch:', resumeError);
+          // If resume fails, retry original stream
+          return attemptStream(retryAttempt + 1);
+        }
+      }
+    };
+
+    await attemptStream();
+  },
+
+  /**
+   * Resume an interrupted message stream.
+   * @param {string} conversationId - The conversation ID
+   * @param {string} connectionToken - Connection token from original stream
+   * @param {AbortSignal} signal - Abort signal for cancellation
+   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @returns {Promise<void>}
+   */
+  async resumeMessageStream(conversationId, connectionToken, signal, onEvent) {
+    const profileId = getCurrentProfileId();
+
+    console.log('[API] Resuming stream with connection token');
+
+    // Call resume endpoint
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/message/stream/resume?profile_id=${profileId}`,
       {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ connection_token: connectionToken }),
         signal: signal,
       }
     );
 
     if (!response.ok) {
-      // Handle 401 specifically
-      if (response.status === 401) {
-        // Try to refresh access token once
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          // Retry the stream with new access token
-          response = await fetch(
-            `${API_BASE}/api/conversations/${conversationId}/message/stream?profile_id=${profileId}`,
-            {
-              method: 'POST',
-              headers: getAuthHeaders(),
-              body: JSON.stringify({ content }),
-              signal: signal,
-            }
-          );
-          if (!response.ok) {
-            throw new Error('Failed to send message after token refresh');
-          }
-        } else {
-          clearAuth();
-          throw new Error('Authentication expired. Please log in again.');
-        }
-      } else {
-        throw new Error('Failed to send message');
-      }
+      const errorText = await response.text();
+      throw new Error(`Failed to resume stream: ${errorText}`);
     }
 
-    // Read the stream
+    // Read the resumed stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
+      let currentEventId = null;
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
+        if (line.startsWith('id: ')) {
+          currentEventId = line.slice(4);
+        } else if (line.startsWith('data: ')) {
           const data = line.slice(6);
           try {
             const event = JSON.parse(data);
-            wrappedOnEvent(event.type, event);
+            // Handle resume_init event
+            if (event.type === 'resume_init') {
+              console.log('[API] Stream resumed from stage:', event.last_stage);
+              onEvent('reconnected', { last_stage: event.last_stage, remaining_stages: event.remaining_stages });
+            } else {
+              onEvent(event.type, event);
+            }
+            currentEventId = null;
           } catch (e) {
             console.error('Failed to parse SSE event:', e);
           }
         }
       }
     }
-
-    // Note: Connection token is available for reconnection logic in the future
-    // Currently we don't expose it, but it's stored and could be used if network drops
   },
 
   /**

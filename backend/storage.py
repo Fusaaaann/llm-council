@@ -325,7 +325,9 @@ def save_partial_assistant_message(
     stage_name: str,
     stage_data: Any,
     metadata: Optional[Dict[str, Any]] = None,
-    profile_id: str = DEFAULT_PROFILE_ID
+    profile_id: str = DEFAULT_PROFILE_ID,
+    stream_id: Optional[str] = None,
+    connection_token: Optional[str] = None
 ):
     """
     Save or update partial assistant message after each stage completes.
@@ -337,6 +339,8 @@ def save_partial_assistant_message(
         stage_data: Data for this stage
         metadata: Optional metadata to update
         profile_id: Profile identifier
+        stream_id: Optional stream identifier for resume tracking
+        connection_token: Optional connection token for resume validation
     """
     conversation = get_conversation(conversation_id, profile_id)
     if conversation is None:
@@ -375,6 +379,14 @@ def save_partial_assistant_message(
         if stage_name == "stage3":
             last_message.pop("partial", None)
 
+    # Update stream metadata for resume capability
+    if stream_id and connection_token:
+        set_stream_metadata(conversation_id, stream_id, connection_token, stage_name, profile_id)
+
+    # Clear stream metadata if stage3 is complete
+    if stage_name == "stage3":
+        clear_stream_metadata(conversation_id, profile_id)
+
     save_conversation(conversation)
     print(f"[INFO] Saved partial state for conversation {conversation_id}, {stage_name}")
 
@@ -411,6 +423,75 @@ def set_conversation_loading(conversation_id: str, is_loading: bool, profile_id:
 
     conversation["is_loading"] = is_loading
     save_conversation(conversation)
+
+
+def set_stream_metadata(
+    conversation_id: str,
+    stream_id: str,
+    connection_token: str,
+    last_stage: str,
+    profile_id: str = DEFAULT_PROFILE_ID
+):
+    """
+    Store stream metadata for resumption purposes.
+
+    Args:
+        conversation_id: Conversation identifier
+        stream_id: Unique identifier for this stream
+        connection_token: Token for validating resume requests
+        last_stage: Last completed stage (stage1, stage1_5, stage2, stage3)
+        profile_id: Profile identifier
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    if "stream_metadata" not in conversation:
+        conversation["stream_metadata"] = {}
+
+    conversation["stream_metadata"] = {
+        "stream_id": stream_id,
+        "connection_token": connection_token,
+        "last_stage": last_stage,
+        "updated_at": datetime.utcnow().isoformat()
+    }
+
+    save_conversation(conversation)
+
+
+def get_stream_metadata(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve stream metadata for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        profile_id: Profile identifier
+
+    Returns:
+        Stream metadata dict or None if not found
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        return None
+
+    return conversation.get("stream_metadata")
+
+
+def clear_stream_metadata(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID):
+    """
+    Clear stream metadata after successful completion or expiry.
+
+    Args:
+        conversation_id: Conversation identifier
+        profile_id: Profile identifier
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        return
+
+    if "stream_metadata" in conversation:
+        del conversation["stream_metadata"]
+        save_conversation(conversation)
 
 
 def get_conversation_loading(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> bool:
