@@ -45,9 +45,9 @@ async def list_conversations(
     - view=public: All public conversations (no auth required)
     - view=all: User's conversations + all public conversations
     """
-    # For public view, no profile access check needed
+    # For public view, no profile access check needed - return all public conversations
     if view == "public":
-        return storage.list_conversations(profile_id="default", view="public")
+        return storage.list_conversations(view="public")
 
     # For private/all views, validate profile access
     pid = get_profile_id_for_request(user, profile_id)
@@ -77,14 +77,26 @@ async def stream_conversations(
     if token and not user:
         try:
             payload = auth.verify_access_token(token)
-            user = {"id": payload["user_id"], "profile_id": payload.get("profile_id")}
+            user_id = payload.get("sub")
+            user_data = auth.get_user_by_id(user_id)
+
+            if user_data:
+                # Reconstruct full user object (matching get_current_user_optional format)
+                user = {
+                    "id": user_data["id"],
+                    "email": user_data["email"],
+                    "name": user_data["name"],
+                    "profile_id": payload.get("profile_id"),
+                    "default_profile_id": user_data["default_profile_id"]
+                }
         except Exception:
             # Invalid token - continue without auth (for public view)
             pass
 
-    # For public view, no profile access check needed
+    # Determine profile ID based on view
     if view == "public":
-        pid = "default"
+        # For public view, profile_id is ignored by storage layer
+        pid = ""  # Placeholder - not used for public view
     else:
         # For private/all views, validate profile access
         pid = get_profile_id_for_request(user, profile_id)
@@ -92,7 +104,7 @@ async def stream_conversations(
     async def event_generator():
         try:
             # Send initial conversation list
-            conversations = storage.list_conversations(pid, view)
+            conversations = storage.list_conversations(pid, view) if view != "public" else storage.list_conversations(view="public")
             yield f"data: {json.dumps({'type': 'initial', 'data': conversations})}\n\n"
 
             # Track last known state (conversation ID -> modified time)
@@ -115,7 +127,7 @@ async def stream_conversations(
                     last_heartbeat = now
 
                 # Fetch current conversation list
-                current_conversations = storage.list_conversations(pid, view)
+                current_conversations = storage.list_conversations(pid, view) if view != "public" else storage.list_conversations(view="public")
                 current_state = {
                     conv['id']: conv.get('modified_at', conv.get('created_at'))
                     for conv in current_conversations

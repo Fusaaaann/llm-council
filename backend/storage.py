@@ -668,17 +668,32 @@ def list_public_conversations() -> List[Dict[str, Any]]:
 
                         # Only include public conversations
                         if data.get("is_public", False):
+                            # Get message count (handles both encrypted and unencrypted)
+                            if "messages" in data:
+                                message_count = len(data["messages"])
+                            elif "messages_encrypted" in data:
+                                # For encrypted data, we need to decrypt to count
+                                # For performance, get the full conversation which will decrypt
+                                profile_id = data.get("profile_id", DEFAULT_PROFILE_ID)
+                                full_conv = get_conversation(data["id"], profile_id)
+                                message_count = len(full_conv.get("messages", []))
+                            else:
+                                message_count = 0
+
                             public_conversations.append({
                                 "id": data["id"],
                                 "profile_id": data.get("profile_id", DEFAULT_PROFILE_ID),
                                 "created_at": data["created_at"],
                                 "published_at": data.get("published_at"),
                                 "title": data.get("title", "New Conversation"),
-                                "message_count": len(data["messages"]),
+                                "message_count": message_count,
                             })
 
-    # Sort by publication time, newest first
-    public_conversations.sort(key=lambda x: x.get("published_at", x["created_at"]), reverse=True)
+    # Sort by publication time, newest first (handle None values)
+    public_conversations.sort(
+        key=lambda x: x.get("published_at") or x.get("created_at") or "",
+        reverse=True
+    )
 
     return public_conversations
 
