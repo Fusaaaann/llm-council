@@ -492,7 +492,28 @@ function App() {
             break;
 
           case 'title_complete':
-            // Reload conversations to get updated title
+            // Optimistically update the title in local state
+            if (event.data && event.data.title) {
+              const newTitle = event.data.title;
+
+              // Update conversations list
+              setConversations((prev) =>
+                prev.map((conv) =>
+                  conv.id === currentConversationId
+                    ? { ...conv, title: newTitle }
+                    : conv
+                )
+              );
+
+              // Update current conversation if it matches
+              setCurrentConversation((prev) =>
+                prev && prev.id === currentConversationId
+                  ? { ...prev, title: newTitle }
+                  : prev
+              );
+            }
+
+            // Still reload to ensure eventual convergence
             loadConversations();
             break;
 
