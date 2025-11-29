@@ -56,7 +56,8 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 - `verify_refresh_token()`: Validate refresh token from session store
 - `verify_connection_token()`: Validate connection token (for heartbeat checks)
 - `revoke_refresh_token()`: Single token revocation (logout)
-- `revoke_all_user_sessions()`: All sessions revocation
+- `revoke_all_user_sessions()`: All sessions revocation for specific user
+- `revoke_all_sessions()`: **Revoke all sessions (all users) - called on server shutdown**
 - **Security functions:**
   - `is_account_locked()`: Check if account is locked
   - `lock_account()`: Lock account for specified duration
@@ -67,6 +68,7 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 - User storage in `data/users.json` **(encrypted)**
 - Session storage in `data/sessions.json` **(encrypted)**
 - Each user gets a default profile automatically
+- **Automatic session cleanup**: All sessions revoked on server shutdown for security
 
 **`auth_middleware.py`** - Request Authentication
 - `get_current_user_optional()`: Dependency for optional auth (local mode)
@@ -108,6 +110,7 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
   - Account lockouts
   - Profile access violations
   - Rate limit violations
+  - **Session revocations** (including server shutdown events)
 - Captures: timestamp, event type, user ID/email, IP, user agent, details
 
 **Rate Limiting (`main.py` via slowapi):**
@@ -839,6 +842,36 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 13. **Model Identifiers**: Current config uses next-gen identifiers (GPT-5.1, Gemini 3, Grok 4) - verify these exist in OpenRouter before deployment
 
 ## Recent Updates
+
+### 🔐 Session Revocation on Server Shutdown (Session 2025-11-29)
+
+Implemented automatic revocation of all login sessions when the backend server shuts down.
+
+**Changes:**
+1. ✅ **New function**: `revoke_all_sessions()` in `backend/auth.py`
+2. ✅ **Lifespan handler**: Migrated from deprecated `@app.on_event` to modern `lifespan` context manager
+3. ✅ **Audit logging**: Added `log_session_revocation()` to track shutdown events
+4. ✅ **Clean shutdown**: All sessions cleared in `data/sessions.json` on server stop
+
+**Security Benefits:**
+- Prevents session hijacking after server restart
+- No stale or orphaned sessions persist
+- Audit trail for all session revocations
+- Forces re-authentication after deployment/restart
+
+**User Experience:**
+- Users must log in again after server restart
+- Frontend automatically detects 401 and shows login modal
+- Clear error messages guide users through re-authentication
+
+**Files Modified:**
+- `backend/auth.py` - Added `revoke_all_sessions()` function
+- `backend/main.py` - Lifespan handler with shutdown cleanup
+- `backend/audit.py` - Added session revocation logging
+- `CLAUDE.md` - Documentation updates
+
+**Documentation:**
+- `ai_notes/SESSION_REVOCATION_ON_SHUTDOWN.md` - Full technical details
 
 ### 🌐 SSE Network Resilience & Stream Resumption (Session 2025-11-29)
 
