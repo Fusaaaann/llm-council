@@ -440,11 +440,7 @@ async def send_message_stream(
                 )
 
             # Send stream initialization event with connection token
-            yield f"data: {json.dumps({
-                'type': 'stream_init',
-                'stream_id': stream_id,
-                'connection_token': connection_token
-            })}\n\n"
+            yield f"data: {json.dumps({'type': 'stream_init', 'stream_id': stream_id, 'connection_token': connection_token})}\n\n"
 
             # Heartbeat tracking
             last_heartbeat = [time.time()]  # Use list for mutability in nested function
