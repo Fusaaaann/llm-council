@@ -73,8 +73,9 @@ async def stream_conversations(
 
     Note: Accepts token as query parameter since EventSource doesn't support custom headers.
     """
-    # If token provided in query param (EventSource workaround), verify it
-    if token and not user:
+    # IMPORTANT: EventSource cannot send Authorization headers, so ALWAYS use token from query param
+    # This takes precedence over the Authorization header (if any)
+    if token:
         try:
             payload = auth.verify_access_token(token)
             user_id = payload.get("sub")

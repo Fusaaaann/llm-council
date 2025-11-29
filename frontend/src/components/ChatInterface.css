@@ -237,3 +237,10 @@
   font-size: 15px;
   font-weight: 500;
 }
+
+pre {
+  white-space: pre-wrap;  /* Wrap long lines */
+  word-wrap: break-word;
+  overflow-x: auto;       /* Or add scrollbar */
+  max-width: 100%;
+}
