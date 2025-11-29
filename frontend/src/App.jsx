@@ -412,7 +412,13 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                loading: {
+                  ...lastMsg.loading,
+                  stage1: true
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -421,8 +427,14 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                stage1: event.data,
+                loading: {
+                  ...lastMsg.loading,
+                  stage1: false
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -431,7 +443,13 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1_5 = true;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                loading: {
+                  ...lastMsg.loading,
+                  stage1_5: true
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -441,8 +459,13 @@ function App() {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               // Store questions, but keep loading indicator
-              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
-              lastMsg.stage1_5.questions = event.data;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                stage1_5: {
+                  ...(lastMsg.stage1_5 || {}),
+                  questions: event.data
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -456,10 +479,18 @@ function App() {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               // Add answers and complete stage1_5
-              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
-              lastMsg.stage1_5.answers = event.data;
-              lastMsg.stage1_5.label_to_model = event.label_to_model;
-              lastMsg.loading.stage1_5 = false;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                stage1_5: {
+                  ...(lastMsg.stage1_5 || {}),
+                  answers: event.data,
+                  label_to_model: event.label_to_model
+                },
+                loading: {
+                  ...lastMsg.loading,
+                  stage1_5: false
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -468,7 +499,13 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                loading: {
+                  ...lastMsg.loading,
+                  stage2: true
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -477,9 +514,15 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                stage2: event.data,
+                metadata: event.metadata,
+                loading: {
+                  ...lastMsg.loading,
+                  stage2: false
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -488,7 +531,13 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                loading: {
+                  ...lastMsg.loading,
+                  stage3: true
+                }
+              };
               return { ...prev, messages };
             });
             break;
@@ -497,8 +546,14 @@ function App() {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
-              lastMsg.loading.stage3 = false;
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                stage3: event.data,
+                loading: {
+                  ...lastMsg.loading,
+                  stage3: false
+                }
+              };
               return { ...prev, messages };
             });
             // Clear loading state immediately after stage3 completes
