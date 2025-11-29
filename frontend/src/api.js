@@ -52,6 +52,8 @@ async function refreshAccessToken() {
     return false;
   }
 
+  console.log('[API] Attempting token refresh with token:', refreshToken.substring(0, 20) + '...');
+
   try {
     const response = await fetch(`${API_BASE}/api/auth/refresh`, {
       method: 'POST',
@@ -62,20 +64,46 @@ async function refreshAccessToken() {
     });
 
     if (!response.ok) {
-      console.error('[API] Token refresh failed:', response.status, response.statusText);
+      // Enhanced error logging
+      const errorDetail = await parseErrorResponse(response);
+      console.error('[API] Token refresh failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        detail: errorDetail
+      });
+
+      // Specific handling for different error types
+      if (response.status === 401) {
+        console.error('[API] Refresh token invalid or expired - reasons could be:');
+        console.error('  - Token already used (rotation security)');
+        console.error('  - Token expired (7 day default)');
+        console.error('  - Session revoked on server');
+        console.error('  - Token not found in session store');
+        // Clear auth to force re-login
+        clearAuth();
+      } else if (response.status === 429) {
+        console.error('[API] Rate limit exceeded - too many refresh attempts');
+      }
+
       return false;
     }
 
     const data = await response.json();
     console.log('[API] Token refresh successful, updating tokens');
+    console.log('[API] New access token received');
+    console.log('[API] New refresh token received:', !!data.refresh_token);
+
     updateAccessToken(data.access_token);
     // IMPORTANT: Backend rotates refresh tokens (single-use), must store new one
     if (data.refresh_token) {
       updateRefreshToken(data.refresh_token);
+      console.log('[API] Refresh token rotated and stored');
+    } else {
+      console.warn('[API] No new refresh token in response - token rotation may be disabled');
     }
     return true;
   } catch (error) {
-    console.error('[API] Token refresh error:', error);
+    console.error('[API] Token refresh error (network or parsing):', error);
     return false;
   }
 }
@@ -304,6 +332,44 @@ export const api = {
 
       onEvent(eventType, event);
     };
+
+    // Proactive token refresh: Check if access token will expire soon
+    // This prevents mid-stream token expiry which would lose all progress
+    try {
+      const currentToken = getAccessToken();
+      if (currentToken) {
+        // Decode JWT to check expiry (JWT format: header.payload.signature)
+        try {
+          const payload = JSON.parse(atob(currentToken.split('.')[1]));
+          const expiresAt = payload.exp * 1000; // Convert to milliseconds
+          const timeUntilExpiry = expiresAt - Date.now();
+          const REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+
+          // If token expires in less than 5 minutes, refresh it now
+          if (timeUntilExpiry < REFRESH_THRESHOLD) {
+            console.log('[API] Token expires soon, refreshing before stream...', {
+              expiresIn: Math.round(timeUntilExpiry / 1000) + 's',
+              threshold: REFRESH_THRESHOLD / 1000 + 's'
+            });
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              console.error('[API] Failed to refresh token before stream');
+              clearAuth();
+              throw new Error('Authentication expired. Please log in again.');
+            }
+            console.log('[API] Token refreshed successfully before stream');
+          } else {
+            console.log('[API] Token valid for', Math.round(timeUntilExpiry / 1000) + 's, proceeding with stream');
+          }
+        } catch (decodeError) {
+          // JWT decode failed - token might be malformed, let the stream attempt handle it
+          console.warn('[API] Failed to decode JWT for expiry check:', decodeError);
+        }
+      }
+    } catch (refreshError) {
+      console.error('[API] Error during proactive token refresh:', refreshError);
+      // Don't throw here - let the stream attempt handle auth errors
+    }
 
     // Exponential backoff retry logic
     const attemptStream = async (retryAttempt = 0) => {

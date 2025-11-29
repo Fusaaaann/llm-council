@@ -83,28 +83,40 @@ async def login(req: LoginRequest, request: Request):
 @limiter.limit("20/minute")
 async def refresh_token(req: RefreshTokenRequest, request: Request):
     """Refresh an access token and rotate refresh token for enhanced security."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+
+    token_preview = req.refresh_token[:20] + "..." if len(req.refresh_token) > 20 else req.refresh_token
+    logger.info(f"[AUTH] Refresh token request from {client_ip}, token: {token_preview}")
 
     session = auth.verify_refresh_token(req.refresh_token)
 
     if not session:
+        logger.warning(f"[AUTH] Refresh token verification failed for token: {token_preview}")
         audit.log_token_refresh_failure(ip_address=client_ip, user_agent=user_agent, reason="invalid_token")
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
     user = auth.get_user_by_id(session["user_id"])
     if not user:
+        logger.error(f"[AUTH] User not found for session user_id: {session['user_id']}")
         audit.log_token_refresh_failure(ip_address=client_ip, user_agent=user_agent, reason="user_not_found")
         raise HTTPException(status_code=401, detail="User not found")
 
+    logger.info(f"[AUTH] Revoking old refresh token for user: {user['id']}")
     # Revoke old refresh token immediately (token rotation)
     auth.revoke_refresh_token(req.refresh_token)
 
     # Create new access token AND new refresh token
+    logger.info(f"[AUTH] Creating new tokens for user: {user['id']}")
     access_token = auth.create_access_token(user["id"], user["default_profile_id"])
     new_refresh_token_data = auth.create_refresh_token_record(user["id"], user["default_profile_id"])
 
     audit.log_token_refresh(user["id"], user["email"], ip_address=client_ip, user_agent=user_agent)
+
+    logger.info(f"[AUTH] Token refresh successful for user: {user['id']}, new refresh token: {new_refresh_token_data['token'][:20]}...")
 
     return {
         "access_token": access_token,

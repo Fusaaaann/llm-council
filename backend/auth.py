@@ -246,20 +246,39 @@ def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
     Returns:
         Session data or None if invalid
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    token_preview = token[:20] + "..." if len(token) > 20 else token
+    logger.info(f"[AUTH] Verifying refresh token: {token_preview}")
+
     sessions = load_sessions()
+    logger.info(f"[AUTH] Total sessions in store: {len(sessions)}")
+
     session = sessions.get(token)
 
     if not session:
+        logger.warning(f"[AUTH] Refresh token not found in session store: {token_preview}")
+        logger.warning(f"[AUTH] This could mean:")
+        logger.warning(f"[AUTH]   - Token already used (rotation security)")
+        logger.warning(f"[AUTH]   - Token was revoked (logout)")
+        logger.warning(f"[AUTH]   - Session data corrupted or cleared")
         return None
 
     # Check expiry
     expires_at = datetime.fromisoformat(session["expires_at"])
+    time_until_expiry = expires_at - datetime.utcnow()
+
     if datetime.utcnow() > expires_at:
         # Token expired, remove it
+        logger.warning(f"[AUTH] Refresh token expired: {token_preview}")
+        logger.warning(f"[AUTH]   Expired at: {expires_at.isoformat()}")
+        logger.warning(f"[AUTH]   Current time: {datetime.utcnow().isoformat()}")
         del sessions[token]
         save_sessions(sessions)
         return None
 
+    logger.info(f"[AUTH] Refresh token valid for user_id={session.get('user_id')}, expires in {time_until_expiry}")
     return session
 
 
