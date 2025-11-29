@@ -1,5 +1,6 @@
 """FastAPI backend for LLM Council - Main application startup and configuration."""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import sys
@@ -14,23 +15,34 @@ from .rate_limiter import limiter
 # Import route modules
 from .routes import conversations, auth, profiles, forum, model_config
 
-# Create FastAPI app
-app = FastAPI(title="LLM Council API")
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Add security headers middleware
-app.add_middleware(SecurityHeadersMiddleware)
-
-# Run startup validation
-@app.on_event("startup")
-async def startup_event():
-    """Run security validation on startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown."""
+    # Startup: Run security validation
     try:
         run_startup_validation()
     except SecurityValidationError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
+
+    yield
+
+    # Shutdown: Revoke all sessions for security
+    from .auth import revoke_all_sessions
+    from .audit import log_session_revocation
+    revoke_all_sessions()
+    log_session_revocation("server_shutdown")
+    print("All sessions revoked on shutdown", file=sys.stderr)
+
+
+# Create FastAPI app with lifespan handler
+app = FastAPI(title="LLM Council API", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Enable CORS - configurable via FRONTEND_URLS environment variable
 app.add_middleware(

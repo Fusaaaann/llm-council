@@ -300,6 +300,15 @@ def revoke_all_user_sessions(user_id: str):
     save_sessions(sessions)
 
 
+def revoke_all_sessions():
+    """
+    Revoke all active sessions (all users).
+    Typically called on server shutdown for security.
+    """
+    ensure_auth_files()
+    save_sessions({})
+
+
 # Connection token management (for streaming sessions)
 
 CONNECTION_TOKEN_EXPIRE_MINUTES = 30

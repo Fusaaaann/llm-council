@@ -182,3 +182,12 @@ def log_waitlist_submission(email: str, ip_address: Optional[str] = None):
         email=email,
         ip_address=ip_address
     )
+
+
+def log_session_revocation(reason: str, details: Optional[Dict[str, Any]] = None):
+    """Log session revocation event."""
+    log_event(
+        "session_revocation",
+        "success",
+        details={"reason": reason, **(details or {})}
+    )
