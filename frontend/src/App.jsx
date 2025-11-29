@@ -42,7 +42,8 @@ function App() {
 
   // Subscribe to conversation list updates via SSE
   useEffect(() => {
-    let eventSource = null;
+    let streamActive = true;
+    const abortController = new AbortController();
 
     const handleEvent = (eventType, data) => {
       console.log(`[SSE] Received event: ${eventType}`, data);
@@ -96,20 +97,45 @@ function App() {
       }
     };
 
-    try {
-      eventSource = api.subscribeToConversationUpdates(handleEvent, currentView);
-      console.log('[SSE] Subscribed to conversation updates');
-    } catch (error) {
-      console.error('[SSE] Failed to subscribe:', error);
-      // Fallback to initial load
-      loadConversations();
-    }
+    const startStream = async () => {
+      try {
+        console.log('[SSE] Starting conversation updates stream');
+        await api.subscribeToConversationUpdates(
+          handleEvent,
+          currentView,
+          abortController.signal
+        );
+
+        // Stream ended naturally, reconnect if still active
+        if (streamActive) {
+          console.log('[SSE] Stream ended, reconnecting in 1s...');
+          setTimeout(startStream, 1000);
+        }
+      } catch (error) {
+        if (abortController.signal.aborted) {
+          console.log('[SSE] Stream aborted by cleanup');
+          return;
+        }
+
+        console.error('[SSE] Failed to subscribe:', error);
+
+        // Fallback to initial load
+        loadConversations();
+
+        // Retry connection if still active
+        if (streamActive) {
+          console.log('[SSE] Retrying connection in 5s...');
+          setTimeout(startStream, 5000);
+        }
+      }
+    };
+
+    startStream();
 
     return () => {
-      if (eventSource) {
-        console.log('[SSE] Unsubscribing from conversation updates');
-        eventSource.close();
-      }
+      console.log('[SSE] Unsubscribing from conversation updates');
+      streamActive = false;
+      abortController.abort();
     };
   }, [currentView, currentConversationId]);
 

@@ -623,10 +623,21 @@ async def resume_message_stream(
             raise HTTPException(status_code=403, detail="Connection token does not match conversation")
 
         # Verify user ownership if authenticated
-        if user and token_data.get("user_id") != user["id"]:
+        # Note: JWT uses "sub" claim for user_id, not "user_id"
+        token_user_id = token_data.get("sub")
+        if user and token_user_id != user["id"]:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[RESUME] User mismatch: token has user_id={token_user_id}, current user={user['id']}")
             raise HTTPException(status_code=403, detail="Connection token does not belong to current user")
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"[RESUME] Token validation error: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")
 
     # Get stream metadata
