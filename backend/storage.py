@@ -639,6 +639,54 @@ def unpublish_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFI
     return conversation
 
 
+def get_public_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a public conversation by ID, searching across all profiles.
+    No profile ownership validation - anyone can read public conversations.
+
+    Args:
+        conversation_id: Unique identifier for the conversation
+
+    Returns:
+        Conversation dict or None if not found or not public
+    """
+    ensure_data_dir()
+
+    if not os.path.exists(DATA_DIR):
+        return None
+
+    # Search all profile directories for this conversation
+    for dirname in os.listdir(DATA_DIR):
+        if dirname.startswith("profile_"):
+            profile_dir = os.path.join(DATA_DIR, dirname)
+            if not os.path.isdir(profile_dir):
+                continue
+
+            conversation_path = os.path.join(profile_dir, f"{conversation_id}.json")
+            if os.path.exists(conversation_path):
+                # Found the conversation - load it
+                with open(conversation_path, 'r') as f:
+                    data = json.load(f)
+
+                # Only return if it's public
+                if not data.get("is_public", False):
+                    return None
+
+                # Decrypt if necessary
+                if is_encrypted(data):
+                    provider = get_encryption_provider()
+                    decrypted_messages = decrypt_data(data["messages_encrypted"], provider)
+                    data["messages"] = decrypted_messages
+                    # Remove encryption metadata from returned data
+                    data.pop("messages_encrypted", None)
+                    data.pop("_encryption", None)
+
+                return data
+
+    # Not found in any profile
+    return None
+
+
 def list_public_conversations() -> List[Dict[str, Any]]:
     """
     List all public conversations across all profiles.

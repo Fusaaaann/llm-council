@@ -454,10 +454,11 @@ export const api = {
 
   /**
    * Get a public conversation from the forum.
+   * No profile_id required - anyone can read public conversations.
    */
-  async getForumConversation(conversationId, profileId) {
+  async getForumConversation(conversationId) {
     const response = await fetchWithAuth(
-      `${API_BASE}/api/forum/conversations/${conversationId}?profile_id=${profileId}`
+      `${API_BASE}/api/forum/conversations/${conversationId}`
     );
     if (!response.ok) {
       throw new Error('Failed to get forum conversation');

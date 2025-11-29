@@ -263,6 +263,7 @@ async def send_message(
     Send a message and run the 3-stage council process.
     Returns the complete response with all stages.
     Now uses same stage logic as streaming endpoint.
+    Only conversation owner can send messages.
     """
     pid = get_profile_id_for_request(user, profile_id)
 
@@ -270,6 +271,13 @@ async def send_message(
     conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Verify ownership: conversation's profile_id must match the request profile_id
+    if conversation.get("profile_id") != pid:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only send messages to your own conversations"
+        )
 
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
@@ -358,6 +366,7 @@ async def send_message_stream(
     """
     Send a message and stream the 3-stage council process.
     Returns Server-Sent Events as each stage completes.
+    Only conversation owner can send messages.
     """
     pid = get_profile_id_for_request(user, profile_id)
 
@@ -365,6 +374,13 @@ async def send_message_stream(
     conversation = storage.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Verify ownership: conversation's profile_id must match the request profile_id
+    if conversation.get("profile_id") != pid:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only send messages to your own conversations"
+        )
 
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0

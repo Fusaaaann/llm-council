@@ -15,6 +15,7 @@ export default function ChatInterface({
   onRetryMessage,
   onCancelMessage,
   onUpdateModels,
+  isReadOnly = false,
 }) {
   const [input, setInput] = useState('');
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -80,7 +81,7 @@ export default function ChatInterface({
               conversation.messages[conversation.messages.length - 1]?.role === 'assistant';
             const isOnlyUserMessage = msg.role === 'user' &&
               index === conversation.messages.length - 1;
-            const showActions = (isLastUserMessage || isOnlyUserMessage) && !isLoading;
+            const showActions = (isLastUserMessage || isOnlyUserMessage) && !isLoading && !isReadOnly;
 
             return (
               <div key={index} className="message-group">
@@ -178,43 +179,49 @@ export default function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
-      <form className="input-form" onSubmit={handleSubmit}>
-        <button
-          type="button"
-          className="config-button"
-          onClick={() => setIsConfigOpen(true)}
-          title="Configure models"
-        >
-          ⚙️
-        </button>
-        <textarea
-          ref={inputRef}
-          className="message-input"
-          placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          rows={3}
-        />
-        {isLoading ? (
+      {isReadOnly ? (
+        <div className="read-only-notice">
+          <p>📖 This is a public conversation. View only.</p>
+        </div>
+      ) : (
+        <form className="input-form" onSubmit={handleSubmit}>
           <button
             type="button"
-            className="cancel-button"
-            onClick={onCancelMessage}
+            className="config-button"
+            onClick={() => setIsConfigOpen(true)}
+            title="Configure models"
           >
-            ⏹ Stop
+            ⚙️
           </button>
-        ) : (
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim()}
-          >
-            Send
-          </button>
-        )}
-      </form>
+          <textarea
+            ref={inputRef}
+            className="message-input"
+            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            rows={3}
+          />
+          {isLoading ? (
+            <button
+              type="button"
+              className="cancel-button"
+              onClick={onCancelMessage}
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!input.trim()}
+            >
+              Send
+            </button>
+          )}
+        </form>
+      )}
 
       <ModelConfig
         isOpen={isConfigOpen}

@@ -223,3 +223,17 @@
   background: #e8e8e8;
   border-color: #4a90e2;
 }
+
+.read-only-notice {
+  padding: 24px;
+  border-top: 1px solid #e0e0e0;
+  background: #f9fafb;
+  text-align: center;
+}
+
+.read-only-notice p {
+  margin: 0;
+  color: #666;
+  font-size: 15px;
+  font-weight: 500;
+}

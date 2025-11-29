@@ -4,7 +4,7 @@ import ChatInterface from './components/ChatInterface';
 import AuthModal from './components/AuthModal';
 import AboutModal from './components/AboutModal';
 import { api, API_BASE } from './api';
-import { isAuthenticated, getCurrentUser, setAuth, clearAuth } from './auth';
+import { isAuthenticated, getCurrentUser, setAuth, clearAuth, getProfileIdKey } from './auth';
 import './App.css';
 
 function App() {
@@ -137,7 +137,10 @@ function App() {
 
   const loadConversation = async (id) => {
     try {
-      const conv = await api.getConversation(id);
+      // Use different endpoint based on view
+      const conv = currentView === 'public'
+        ? await api.getForumConversation(id)
+        : await api.getConversation(id);
       setCurrentConversation(conv);
     } catch (error) {
       console.error('Failed to load conversation:', error);
@@ -596,6 +599,12 @@ function App() {
         onCancelMessage={handleCancelMessage}
         onUpdateModels={handleUpdateModels}
         isLoading={isLoading}
+        isReadOnly={
+          // Read-only if: viewing public forum AND conversation doesn't belong to current user
+          currentView === 'public' &&
+          currentConversation &&
+          currentConversation.profile_id !== localStorage.getItem(getProfileIdKey())
+        }
       />
       <AuthModal
         isOpen={showAuthModal}
