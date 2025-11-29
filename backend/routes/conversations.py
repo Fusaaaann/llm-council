@@ -54,6 +54,112 @@ async def list_conversations(
     return storage.list_conversations(pid, view)
 
 
+@router.get("/stream")
+async def stream_conversations(
+    profile_id: Optional[str] = Query(None),
+    view: str = Query("private", description="View mode: private (own), public (all public), all (both)"),
+    token: Optional[str] = Query(None, description="Access token (for EventSource compatibility)"),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Stream conversation list updates via Server-Sent Events.
+
+    Sends events:
+    - initial: Full conversation list on connection
+    - conversation_created: New conversation added
+    - conversation_updated: Conversation modified (title, loading state, etc.)
+    - conversation_deleted: Conversation removed
+    - heartbeat: Keep-alive every 30 seconds
+
+    Note: Accepts token as query parameter since EventSource doesn't support custom headers.
+    """
+    # If token provided in query param (EventSource workaround), verify it
+    if token and not user:
+        try:
+            payload = auth.verify_access_token(token)
+            user = {"id": payload["user_id"], "profile_id": payload.get("profile_id")}
+        except Exception:
+            # Invalid token - continue without auth (for public view)
+            pass
+
+    # For public view, no profile access check needed
+    if view == "public":
+        pid = "default"
+    else:
+        # For private/all views, validate profile access
+        pid = get_profile_id_for_request(user, profile_id)
+
+    async def event_generator():
+        try:
+            # Send initial conversation list
+            conversations = storage.list_conversations(pid, view)
+            yield f"data: {json.dumps({'type': 'initial', 'data': conversations})}\n\n"
+
+            # Track last known state (conversation ID -> modified time)
+            last_state = {
+                conv['id']: conv.get('modified_at', conv.get('created_at'))
+                for conv in conversations
+            }
+
+            POLL_INTERVAL = 2  # seconds
+            HEARTBEAT_INTERVAL = 30  # seconds
+            last_heartbeat = time.time()
+
+            while True:
+                await asyncio.sleep(POLL_INTERVAL)
+
+                # Check for heartbeat
+                now = time.time()
+                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': now})}\n\n"
+                    last_heartbeat = now
+
+                # Fetch current conversation list
+                current_conversations = storage.list_conversations(pid, view)
+                current_state = {
+                    conv['id']: conv.get('modified_at', conv.get('created_at'))
+                    for conv in current_conversations
+                }
+                current_ids = set(current_state.keys())
+                last_ids = set(last_state.keys())
+
+                # Detect new conversations
+                new_ids = current_ids - last_ids
+                for conv_id in new_ids:
+                    conv = next(c for c in current_conversations if c['id'] == conv_id)
+                    yield f"data: {json.dumps({'type': 'conversation_created', 'data': conv})}\n\n"
+
+                # Detect deleted conversations
+                deleted_ids = last_ids - current_ids
+                for conv_id in deleted_ids:
+                    yield f"data: {json.dumps({'type': 'conversation_deleted', 'data': {'id': conv_id}})}\n\n"
+
+                # Detect updated conversations (modified time changed)
+                for conv_id in current_ids & last_ids:
+                    if current_state[conv_id] != last_state[conv_id]:
+                        conv = next(c for c in current_conversations if c['id'] == conv_id)
+                        yield f"data: {json.dumps({'type': 'conversation_updated', 'data': conv})}\n\n"
+
+                # Update tracked state
+                last_state = current_state
+
+        except asyncio.CancelledError:
+            # Client disconnected
+            pass
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
+
+
 @router.post("", response_model=Conversation)
 async def create_conversation(
     req: CreateConversationRequest,

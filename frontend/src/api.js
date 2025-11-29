@@ -639,4 +639,56 @@ export const api = {
     }
     return response.text();
   },
+
+  // ==================== SSE Streaming ====================
+
+  /**
+   * Subscribe to conversation list updates via Server-Sent Events.
+   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @param {string} view - View mode: "private", "public", or "all"
+   * @param {AbortSignal} signal - Abort signal for disconnection
+   * @returns {EventSource} - The EventSource instance
+   */
+  subscribeToConversationUpdates(onEvent, view = 'private', signal = null) {
+    const profileId = getCurrentProfileId();
+    const token = getAccessToken();
+
+    // Build URL with query parameters
+    let url = `${API_BASE}/api/conversations/stream?view=${view}`;
+    if (view !== 'public') {
+      url += `&profile_id=${profileId}`;
+    }
+
+    // EventSource doesn't support custom headers, so we pass token as query param
+    // Note: This is less secure than headers, but EventSource limitation
+    if (token) {
+      url += `&token=${token}`;
+    }
+
+    const eventSource = new EventSource(url);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onEvent(data.type, data.data || data);
+      } catch (error) {
+        console.error('[API] Failed to parse SSE message:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('[API] EventSource error:', error);
+      eventSource.close();
+      onEvent('error', { message: 'Connection lost' });
+    };
+
+    // Handle abort signal
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        eventSource.close();
+      });
+    }
+
+    return eventSource;
+  },
 };

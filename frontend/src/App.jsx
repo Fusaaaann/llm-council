@@ -39,97 +39,78 @@ function App() {
     }
   }, []);
 
-  // Load conversations on mount and when view changes
+  // Subscribe to conversation list updates via SSE
   useEffect(() => {
-    loadConversations();
-  }, [currentView]);
+    let eventSource = null;
 
-  // Smart polling for conversation loading states
-  useEffect(() => {
-    let pollInterval = 1000; // Start with 1s
-    const MIN_INTERVAL = 1000;
-    const MAX_INTERVAL = 60000; // Max 60s
-    const IDLE_INTERVALS = [1000, 2000, 5000, 10000, 30000, 60000]; // Backoff schedule
-    const STOP_AFTER_MS = 5 * 60 * 1000; // Stop after 5 min idle
+    const handleEvent = (eventType, data) => {
+      console.log(`[SSE] Received event: ${eventType}`, data);
 
-    let intervalId = null;
-    let currentIntervalIndex = 0;
-    let lastActivityTime = Date.now();
-    let totalIdleTime = 0;
+      switch (eventType) {
+        case 'initial':
+          // Full conversation list on connection
+          setConversations(data);
+          break;
 
-    const hasActiveLoading = () => {
-      return conversations.some(conv => conv.is_loading);
-    };
+        case 'conversation_created':
+          // New conversation added
+          setConversations(prev => [...prev, data]);
+          break;
 
-    const resetPolling = () => {
-      currentIntervalIndex = 0;
-      pollInterval = IDLE_INTERVALS[0];
-      lastActivityTime = Date.now();
-      totalIdleTime = 0;
-    };
+        case 'conversation_updated':
+          // Conversation modified
+          setConversations(prev =>
+            prev.map(conv => conv.id === data.id ? data : conv)
+          );
+          // If current conversation was updated, refresh it
+          if (currentConversationId === data.id) {
+            loadConversation(data.id);
+          }
+          break;
 
-    const poll = async () => {
-      const now = Date.now();
-      const timeSinceLastActivity = now - lastActivityTime;
+        case 'conversation_deleted':
+          // Conversation removed
+          setConversations(prev =>
+            prev.filter(conv => conv.id !== data.id)
+          );
+          // If current conversation was deleted, clear selection
+          if (currentConversationId === data.id) {
+            setCurrentConversationId(null);
+            setCurrentConversation(null);
+          }
+          break;
 
-      // Stop polling after prolonged inactivity
-      if (totalIdleTime >= STOP_AFTER_MS) {
-        console.log('[Polling] Stopped after 5 minutes of inactivity');
-        if (intervalId) clearInterval(intervalId);
-        return;
-      }
+        case 'heartbeat':
+          // Keep-alive - no action needed
+          break;
 
-      await loadConversations();
+        case 'error':
+          console.error('[SSE] Error:', data.message);
+          // Fallback to polling on error
+          loadConversations();
+          break;
 
-      // If actively loading, reset to fast polling
-      if (hasActiveLoading() || isLoading) {
-        if (currentIntervalIndex !== 0) {
-          console.log('[Polling] Active loading detected, resetting to 1s interval');
-          resetPolling();
-          // Restart with new interval
-          if (intervalId) clearInterval(intervalId);
-          intervalId = setInterval(poll, pollInterval);
-        }
-      } else {
-        // Idle - gradually slow down
-        totalIdleTime += timeSinceLastActivity;
-        lastActivityTime = now;
-
-        if (currentIntervalIndex < IDLE_INTERVALS.length - 1) {
-          currentIntervalIndex++;
-          pollInterval = IDLE_INTERVALS[currentIntervalIndex];
-          console.log(`[Polling] Backing off to ${pollInterval}ms interval`);
-
-          // Restart with new interval
-          if (intervalId) clearInterval(intervalId);
-          intervalId = setInterval(poll, pollInterval);
-        }
+        default:
+          console.warn('[SSE] Unknown event type:', eventType);
       }
     };
 
-    // Start polling
-    intervalId = setInterval(poll, pollInterval);
-
-    // Reset polling on user activity
-    const activityHandler = () => {
-      if (totalIdleTime > 0 || currentIntervalIndex > 0) {
-        console.log('[Polling] User activity detected, resetting to 1s interval');
-        resetPolling();
-        if (intervalId) clearInterval(intervalId);
-        intervalId = setInterval(poll, pollInterval);
-      }
-    };
-
-    // Listen for user interactions
-    window.addEventListener('click', activityHandler);
-    window.addEventListener('keydown', activityHandler);
+    try {
+      eventSource = api.subscribeToConversationUpdates(handleEvent, currentView);
+      console.log('[SSE] Subscribed to conversation updates');
+    } catch (error) {
+      console.error('[SSE] Failed to subscribe:', error);
+      // Fallback to initial load
+      loadConversations();
+    }
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
-      window.removeEventListener('click', activityHandler);
-      window.removeEventListener('keydown', activityHandler);
+      if (eventSource) {
+        console.log('[SSE] Unsubscribing from conversation updates');
+        eventSource.close();
+      }
     };
-  }, [conversations, isLoading]);
+  }, [currentView, currentConversationId]);
 
   // Load conversation details when selected
   useEffect(() => {

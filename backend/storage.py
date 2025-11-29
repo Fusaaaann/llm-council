@@ -158,6 +158,9 @@ def save_conversation(conversation: Dict[str, Any], profile_id: str = None):
     # Create a copy to avoid modifying original
     data_to_save = conversation.copy()
 
+    # Update modified_at timestamp
+    data_to_save["modified_at"] = datetime.utcnow().isoformat()
+
     # Encrypt messages if encryption is enabled
     provider = get_encryption_provider()
     if provider is not None:
@@ -224,6 +227,7 @@ def list_conversations(profile_id: str = DEFAULT_PROFILE_ID, view: str = "privat
                         "id": data["id"],
                         "profile_id": profile_id,
                         "created_at": data["created_at"],
+                        "modified_at": data.get("modified_at", data["created_at"]),
                         "title": data.get("title", "New Conversation"),
                         "message_count": message_count,
                         "is_loading": data.get("is_loading", False),
