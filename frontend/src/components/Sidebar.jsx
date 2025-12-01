@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './Sidebar.css';
 
 export default function Sidebar({
@@ -21,6 +21,21 @@ export default function Sidebar({
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!openMenuId) return;
+
+    const handleClickOutside = (e) => {
+      // Check if click is on menu button or inside menu
+      if (!e.target.closest('.conversation-menu') && !e.target.closest('.menu-button')) {
+        setOpenMenuId(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openMenuId]);
 
   const handleMenuToggle = (convId, e) => {
     e.stopPropagation();
@@ -216,10 +231,13 @@ export default function Sidebar({
                           </button>
                         )}
                         <button onClick={(e) => handleExport(conv.id, 'markdown', e)}>
-                          📄 Export to Markdown
+                          📄 Export (Markdown)
                         </button>
-                        <button onClick={(e) => handleExport(conv.id, 'pdf', e)}>
-                          📑 Export to PDF
+                        <button onClick={(e) => handleExport(conv.id, 'html', e)}>
+                          🌐 Export (HTML)
+                        </button>
+                        <button onClick={(e) => handleExport(conv.id, 'json', e)}>
+                          📋 Export (JSON)
                         </button>
                         <button onClick={(e) => handleDelete(conv.id, e)} className="delete-btn">
                           🗑️ Delete

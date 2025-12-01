@@ -7,6 +7,7 @@ import uuid
 import json
 import asyncio
 import time
+from urllib.parse import quote
 
 from .. import config, storage, auth
 from ..council import (
@@ -28,10 +29,25 @@ from ..models import (
     Conversation,
     ConversationMetadata
 )
-from ..utils import conversation_to_markdown
+from ..utils import conversation_to_markdown, conversation_to_html, conversation_to_json
 from ..rate_limiter import limiter
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+
+def encode_filename_header(filename: str) -> str:
+    """
+    Encode filename for Content-Disposition header to support non-ASCII characters.
+    Uses RFC 5987 encoding: filename*=UTF-8''encoded_filename
+    """
+    # Try ASCII first (for better compatibility)
+    try:
+        filename.encode('ascii')
+        return f'attachment; filename="{filename}"'
+    except UnicodeEncodeError:
+        # Use RFC 5987 encoding for non-ASCII characters
+        encoded_filename = quote(filename, safe='')
+        return f"attachment; filename*=UTF-8''{encoded_filename}"
 
 
 @router.get("", response_model=List[ConversationMetadata])
@@ -285,13 +301,54 @@ async def export_markdown(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    markdown = conversation_to_markdown(conversation)
-    filename = f"{conversation['title'].replace(' ', '_')}.md"
+    markdown, filename = conversation_to_markdown(conversation)
 
     return Response(
         content=markdown,
         media_type="text/markdown",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": encode_filename_header(filename)}
+    )
+
+
+@router.get("/{conversation_id}/export/html")
+async def export_html(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Export conversation as HTML."""
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    html, filename = conversation_to_html(conversation)
+
+    return Response(
+        content=html,
+        media_type="text/html",
+        headers={"Content-Disposition": encode_filename_header(filename)}
+    )
+
+
+@router.get("/{conversation_id}/export/json")
+async def export_json(
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Export conversation as JSON."""
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    json_data, filename = conversation_to_json(conversation)
+
+    return Response(
+        content=json_data,
+        media_type="application/json",
+        headers={"Content-Disposition": encode_filename_header(filename)}
     )
 
 

@@ -226,7 +226,15 @@ function App() {
       await api.exportConversation(id, format);
     } catch (error) {
       console.error('Failed to export conversation:', error);
-      alert('Export to PDF is not yet implemented. Please use Markdown export.');
+
+      // Show appropriate error message based on format
+      if (format === 'pdf') {
+        alert('Export to PDF is not yet implemented. Please use Markdown export.');
+      } else {
+        // Show actual error for markdown export failures
+        const errorMessage = error.message || 'Unknown error occurred';
+        alert(`Failed to export conversation to ${format}: ${errorMessage}`);
+      }
     }
   };
 

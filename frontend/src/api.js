@@ -659,11 +659,31 @@ export const api = {
     if (!response.ok) {
       throw new Error('Failed to export conversation');
     }
+
+    // Extract filename from Content-Disposition header
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `conversation.${format === 'markdown' ? 'md' : format}`;
+
+    if (contentDisposition) {
+      // Try RFC 5987 encoding first (filename*=UTF-8''...)
+      const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+      if (filenameStarMatch) {
+        filename = decodeURIComponent(filenameStarMatch[1]);
+      } else {
+        // Fall back to regular filename="..." or filename=...
+        const filenameMatch = contentDisposition.match(/filename=["']?([^"';\n]+)["']?/i);
+        if (filenameMatch) {
+          filename = filenameMatch[1].trim();
+        }
+      }
+    }
+
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `conversation.${format === 'markdown' ? 'md' : 'pdf'}`;
+    a.download = filename;
+
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
