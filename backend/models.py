@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
     uses_byok: bool = False
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):
@@ -90,3 +92,5 @@ class Conversation(BaseModel):
     published_at: Optional[str] = None
     sync_status: str = "local"
     uses_byok: bool = False
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None

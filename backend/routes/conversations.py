@@ -24,6 +24,7 @@ from ..models import (
     SendMessageRequest,
     ResumeStreamRequest,
     RenameConversationRequest,
+    ModelConfigRequest,
     Conversation,
     ConversationMetadata
 )
@@ -183,7 +184,13 @@ async def create_conversation(
     """Create a new conversation."""
     pid = get_profile_id_for_request(user, profile_id)
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id, pid, req.uses_byok)
+    conversation = storage.create_conversation(
+        conversation_id,
+        pid,
+        req.uses_byok,
+        req.council_models,
+        req.chairman_model
+    )
     return conversation
 
 
@@ -215,6 +222,40 @@ async def rename_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     storage.update_conversation_title(conversation_id, req.title, pid)
+    return {"success": True}
+
+
+@router.patch("/{conversation_id}/models")
+async def update_conversation_models(
+    conversation_id: str,
+    req: ModelConfigRequest,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """Update conversation models (only allowed before first message)."""
+    pid = get_profile_id_for_request(user, profile_id)
+    conversation = storage.get_conversation(conversation_id, pid)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Verify ownership
+    if conversation.get("profile_id") != pid:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update your own conversations"
+        )
+
+    # Only allow updates before first message
+    if conversation.get("messages") and len(conversation["messages"]) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update models after messages have been sent"
+        )
+
+    # Update the conversation models
+    storage.update_conversation_models(
+        conversation_id, req.council_models, req.chairman_model, pid
+    )
     return {"success": True}
 
 
@@ -291,26 +332,38 @@ async def send_message(
         # Add user message
         storage.add_user_message(conversation_id, req.content, pid)
 
+        # Get model configuration from conversation
+        council_models = conversation.get("council_models")
+        chairman_model = conversation.get("chairman_model")
+
+        # Fallback to global config if not set (backward compatibility)
+        if not council_models:
+            from ..config import COUNCIL_MODELS
+            council_models = COUNCIL_MODELS
+        if not chairman_model:
+            from ..config import CHAIRMAN_MODEL
+            chairman_model = CHAIRMAN_MODEL
+
         # Generate title in parallel if first message
         title_task = None
         if is_first_message:
             title_task = asyncio.create_task(generate_conversation_title(req.content))
 
         # Stage 1: Collect responses
-        stage1_results = await stage1_collect_responses(req.content)
+        stage1_results = await stage1_collect_responses(req.content, council_models)
 
         # Stage 1.5: Cross-interrogation (questions)
-        questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
+        questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results, council_models)
 
         # Stage 1.5: Collect answers
         answers_results = await stage1_5_collect_answers(req.content, stage1_results, questions_results, label_to_model_interrogation)
 
         # Stage 2: Collect rankings
-        stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
+        stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results, council_models)
         aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
 
         # Stage 3: Synthesize final answer
-        stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
+        stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results, chairman_model)
 
         # Wait for title if it was started
         if title_task:
@@ -486,6 +539,18 @@ async def send_message_stream(
                         storage.remove_last_assistant_message(conversation_id, pid)
                         storage.add_user_message(conversation_id, req.content, pid)
 
+                # Get model configuration from conversation
+                council_models = conversation.get("council_models")
+                chairman_model = conversation.get("chairman_model")
+
+                # Fallback to global config if not set (backward compatibility)
+                if not council_models:
+                    from ..config import COUNCIL_MODELS
+                    council_models = COUNCIL_MODELS
+                if not chairman_model:
+                    from ..config import CHAIRMAN_MODEL
+                    chairman_model = CHAIRMAN_MODEL
+
                 # Start title generation in parallel (don't await yet)
                 title_task = None
                 if is_first_message:
@@ -493,7 +558,7 @@ async def send_message_stream(
 
                 # Stage 1: Collect responses
                 yield send_event('stage1_start', stage='stage1')
-                stage1_results = await stage1_collect_responses(req.content)
+                stage1_results = await stage1_collect_responses(req.content, council_models)
                 yield send_event('stage1_complete', stage1_results, 'stage1')
                 # Save partial state after stage1 with stream metadata
                 storage.save_partial_assistant_message(
@@ -510,7 +575,7 @@ async def send_message_stream(
 
                 # Stage 1.5: Cross-interrogation (questions)
                 yield send_event('stage1_5_questions_start', stage='stage1_5')
-                questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results)
+                questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(req.content, stage1_results, council_models)
                 yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
 
                 # Stage 1.5: Collect answers
@@ -540,7 +605,7 @@ async def send_message_stream(
 
                 # Stage 2: Collect rankings
                 yield send_event('stage2_start', stage='stage2')
-                stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results)
+                stage2_results, label_to_model = await stage2_collect_rankings(req.content, stage1_results, council_models)
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
                 yield send_event('stage2_complete', {
                     'data': stage2_results,
@@ -568,7 +633,7 @@ async def send_message_stream(
 
                 # Stage 3: Synthesize final answer
                 yield send_event('stage3_start', stage='stage3')
-                stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results)
+                stage3_result = await stage3_synthesize_final(req.content, stage1_results, stage2_results, chairman_model)
                 yield send_event('stage3_complete', stage3_result, 'stage3')
                 # Save partial state after stage3 (marks as complete, clears stream metadata)
                 storage.save_partial_assistant_message(
@@ -699,6 +764,18 @@ async def resume_message_stream(
     if len(messages) >= 2 and messages[-2].get("role") == "user":
         user_message_content = messages[-2].get("content", "")
 
+    # Get model configuration from conversation
+    council_models = conversation.get("council_models")
+    chairman_model = conversation.get("chairman_model")
+
+    # Fallback to global config if not set (backward compatibility)
+    if not council_models:
+        from ..config import COUNCIL_MODELS
+        council_models = COUNCIL_MODELS
+    if not chairman_model:
+        from ..config import CHAIRMAN_MODEL
+        chairman_model = CHAIRMAN_MODEL
+
     # Stream remaining stages
     async def resume_generator():
         try:
@@ -732,7 +809,7 @@ async def resume_message_stream(
                     # Stage 1.5: Cross-interrogation
                     yield send_event('stage1_5_questions_start', stage='stage1_5')
                     questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(
-                        user_message_content, stage1_results
+                        user_message_content, stage1_results, council_models
                     )
                     yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
 
@@ -758,7 +835,7 @@ async def resume_message_stream(
                 elif stage == "stage2":
                     # Stage 2: Rankings
                     yield send_event('stage2_start', stage='stage2')
-                    stage2_results, label_to_model = await stage2_collect_rankings(user_message_content, stage1_results)
+                    stage2_results, label_to_model = await stage2_collect_rankings(user_message_content, stage1_results, council_models)
                     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
                     yield send_event('stage2_complete', {
                         'data': stage2_results,
@@ -780,7 +857,7 @@ async def resume_message_stream(
                 elif stage == "stage3":
                     # Stage 3: Final synthesis
                     yield send_event('stage3_start', stage='stage3')
-                    stage3_result = await stage3_synthesize_final(user_message_content, stage1_results, stage2_results)
+                    stage3_result = await stage3_synthesize_final(user_message_content, stage1_results, stage2_results, chairman_model)
                     yield send_event('stage3_complete', stage3_result, 'stage3')
                     storage.save_partial_assistant_message(
                         conversation_id, "stage3", stage3_result,

@@ -5,6 +5,7 @@ import AuthModal from './components/AuthModal';
 import AboutModal from './components/AboutModal';
 import { api, API_BASE } from './api';
 import { isAuthenticated, getCurrentUser, setAuth, clearAuth, getProfileIdKey } from './auth';
+import { useQueryState } from './queryState.jsx';
 import './App.css';
 
 function App() {
@@ -20,6 +21,9 @@ function App() {
   const [inviteToken, setInviteToken] = useState(null);
   const [currentView, setCurrentView] = useState('private');
   const [reconnectionStatus, setReconnectionStatus] = useState(null); // { attempt, maxAttempts, delay }
+
+  // Query state management
+  const queryState = useQueryState();
 
   // Check for invite token in URL on mount
   useEffect(() => {
@@ -306,7 +310,13 @@ function App() {
 
   const handleUpdateModels = async (councilModels, chairmanModel) => {
     try {
-      await api.updateModels(councilModels, chairmanModel);
+      // Update conversation models if it's a new conversation (no messages yet)
+      if (currentConversationId && (!currentConversation?.messages || currentConversation.messages.length === 0)) {
+        await api.updateConversationModels(currentConversationId, councilModels, chairmanModel);
+        // Reload conversation to reflect changes
+        await loadConversation(currentConversationId);
+      }
+      // For existing conversations with messages, models are read-only (enforced by ModelConfig UI)
     } catch (error) {
       console.error('Failed to update models:', error);
       throw error;
@@ -351,6 +361,10 @@ function App() {
       abortController.abort();
       setAbortController(null);
     }
+    // Cancel query state
+    if (currentConversationId) {
+      queryState.cancelQuery(currentConversationId);
+    }
     setIsLoading(false);
     // Remove the partial assistant response
     setCurrentConversation((prev) => {
@@ -370,6 +384,10 @@ function App() {
     setAbortController(controller);
 
     setIsLoading(true);
+
+    // Start query state tracking
+    queryState.startQuery(currentConversationId);
+
     try {
       // Optimistically add user message to UI (unless retrying)
       if (!skipAddingUserMessage) {
@@ -390,12 +408,6 @@ function App() {
           stage2: null,
           stage3: null,
           metadata: null,
-          loading: {
-            stage1: true,  // Start with stage1 loading immediately
-            stage1_5: false,
-            stage2: false,
-            stage3: false,
-          },
         };
 
         // Add the partial assistant message
@@ -415,6 +427,7 @@ function App() {
         (eventType, event) => {
         switch (eventType) {
           case 'stage1_start':
+            queryState.updateStageStatus(currentConversationId, 'stage1', 'loading');
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
@@ -428,50 +441,27 @@ function App() {
                   stage2: null,
                   stage3: null,
                   metadata: null,
-                  loading: { stage1: true, stage1_5: false, stage2: false, stage3: false }
                 });
-              } else {
-                messages[messages.length - 1] = {
-                  ...lastMsg,
-                  loading: {
-                    ...lastMsg.loading,
-                    stage1: true
-                  }
-                };
               }
               return { ...prev, messages };
             });
             break;
 
           case 'stage1_complete':
+            queryState.updateStageStatus(currentConversationId, 'stage1', 'complete');
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               messages[messages.length - 1] = {
                 ...lastMsg,
                 stage1: event.data,
-                loading: {
-                  ...lastMsg.loading,
-                  stage1: false
-                }
               };
               return { ...prev, messages };
             });
             break;
 
           case 'stage1_5_questions_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                loading: {
-                  ...lastMsg.loading,
-                  stage1_5: true
-                }
-              };
-              return { ...prev, messages };
-            });
+            queryState.updateStageStatus(currentConversationId, 'stage1_5', 'loading');
             break;
 
           case 'stage1_5_questions_complete':
@@ -495,6 +485,7 @@ function App() {
             break;
 
           case 'stage1_5_answers_complete':
+            queryState.updateStageStatus(currentConversationId, 'stage1_5', 'complete');
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
@@ -506,31 +497,17 @@ function App() {
                   answers: event.data,
                   label_to_model: event.label_to_model
                 },
-                loading: {
-                  ...lastMsg.loading,
-                  stage1_5: false
-                }
               };
               return { ...prev, messages };
             });
             break;
 
           case 'stage2_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                loading: {
-                  ...lastMsg.loading,
-                  stage2: true
-                }
-              };
-              return { ...prev, messages };
-            });
+            queryState.updateStageStatus(currentConversationId, 'stage2', 'loading');
             break;
 
           case 'stage2_complete':
+            queryState.updateStageStatus(currentConversationId, 'stage2', 'complete');
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
@@ -538,41 +515,23 @@ function App() {
                 ...lastMsg,
                 stage2: event.data,
                 metadata: event.metadata,
-                loading: {
-                  ...lastMsg.loading,
-                  stage2: false
-                }
               };
               return { ...prev, messages };
             });
             break;
 
           case 'stage3_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                loading: {
-                  ...lastMsg.loading,
-                  stage3: true
-                }
-              };
-              return { ...prev, messages };
-            });
+            queryState.updateStageStatus(currentConversationId, 'stage3', 'loading');
             break;
 
           case 'stage3_complete':
+            queryState.updateStageStatus(currentConversationId, 'stage3', 'complete');
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               messages[messages.length - 1] = {
                 ...lastMsg,
                 stage3: event.data,
-                loading: {
-                  ...lastMsg.loading,
-                  stage3: false
-                }
               };
               return { ...prev, messages };
             });
@@ -608,7 +567,8 @@ function App() {
             break;
 
           case 'complete':
-            // Stream complete, reload conversations list
+            // Stream complete, mark query as complete
+            queryState.completeQuery(currentConversationId);
             loadConversations();
             setIsLoading(false);
             setAbortController(null);
@@ -616,6 +576,7 @@ function App() {
 
           case 'error':
             console.error('Stream error:', event.message);
+            queryState.cancelQuery(currentConversationId);
             setIsLoading(false);
             setAbortController(null);
             break;
@@ -678,8 +639,10 @@ function App() {
       // Check if it was aborted
       if (error.name === 'AbortError') {
         console.log('Message sending cancelled');
+        queryState.cancelQuery(currentConversationId);
       } else {
         console.error('Failed to send message:', error);
+        queryState.cancelQuery(currentConversationId);
         // Remove optimistic messages on error
         setCurrentConversation((prev) => ({
           ...prev,
@@ -736,6 +699,7 @@ function App() {
           onCancelMessage={handleCancelMessage}
           onUpdateModels={handleUpdateModels}
           isLoading={isLoading}
+          queryState={currentConversationId ? queryState.getQueryState(currentConversationId) : null}
           isReadOnly={
             // Read-only if: viewing public forum AND conversation doesn't belong to current user
             currentView === 'public' &&

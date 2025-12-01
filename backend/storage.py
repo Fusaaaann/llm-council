@@ -65,7 +65,13 @@ def get_conversation_path(conversation_id: str, profile_id: str = DEFAULT_PROFIL
     return os.path.join(profile_dir, f"{conversation_id}.json")
 
 
-def create_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID, uses_byok: bool = False) -> Dict[str, Any]:
+def create_conversation(
+    conversation_id: str,
+    profile_id: str = DEFAULT_PROFILE_ID,
+    uses_byok: bool = False,
+    council_models: Optional[List[str]] = None,
+    chairman_model: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Create a new conversation.
 
@@ -73,11 +79,16 @@ def create_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_
         conversation_id: Unique identifier for the conversation
         profile_id: Profile identifier
         uses_byok: Whether the conversation uses bring-your-own-key
+        council_models: List of model identifiers for council (defaults to config.COUNCIL_MODELS)
+        chairman_model: Model identifier for chairman (defaults to config.CHAIRMAN_MODEL)
 
     Returns:
         New conversation dict
     """
     ensure_data_dir()
+
+    # Import here to avoid circular dependency
+    from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
     conversation = {
         "id": conversation_id,
@@ -88,7 +99,9 @@ def create_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_
         "is_public": not uses_byok,  # Default: public unless BYOK
         "published_at": None,
         "sync_status": "local",  # local, syncing, synced
-        "uses_byok": uses_byok
+        "uses_byok": uses_byok,
+        "council_models": council_models if council_models is not None else COUNCIL_MODELS,
+        "chairman_model": chairman_model if chairman_model is not None else CHAIRMAN_MODEL
     }
 
     # Save to file (only if public in production, always in local mode)
@@ -428,6 +441,30 @@ def update_conversation_title(conversation_id: str, title: str, profile_id: str 
         raise ValueError(f"Conversation {conversation_id} not found")
 
     conversation["title"] = title
+    save_conversation(conversation)
+
+
+def update_conversation_models(
+    conversation_id: str,
+    council_models: List[str],
+    chairman_model: str,
+    profile_id: str = DEFAULT_PROFILE_ID
+):
+    """
+    Update the model configuration for a conversation (only allowed before first message).
+
+    Args:
+        conversation_id: Conversation identifier
+        council_models: List of model identifiers for council
+        chairman_model: Model identifier for chairman
+        profile_id: Profile identifier
+    """
+    conversation = get_conversation(conversation_id, profile_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["council_models"] = council_models
+    conversation["chairman_model"] = chairman_model
     save_conversation(conversation)
 
 

@@ -238,14 +238,21 @@ export const api = {
 
   /**
    * Create a new conversation.
+   * @param {boolean} usesByok - Whether the conversation uses bring-your-own-key
+   * @param {string[]} councilModels - Optional list of council model identifiers
+   * @param {string} chairmanModel - Optional chairman model identifier
    */
-  async createConversation(usesByok = false) {
+  async createConversation(usesByok = false, councilModels = null, chairmanModel = null) {
     const profileId = getCurrentProfileId();
     const response = await fetchWithAuth(
       `${API_BASE}/api/conversations?profile_id=${profileId}`,
       {
         method: 'POST',
-        body: JSON.stringify({ uses_byok: usesByok }),
+        body: JSON.stringify({
+          uses_byok: usesByok,
+          council_models: councilModels,
+          chairman_model: chairmanModel
+        }),
       }
     );
     if (!response.ok) {
@@ -598,6 +605,28 @@ export const api = {
     );
     if (!response.ok) {
       throw new Error('Failed to rename conversation');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update conversation models (only allowed before first message).
+   */
+  async updateConversationModels(conversationId, councilModels, chairmanModel) {
+    const profileId = getCurrentProfileId();
+    const response = await fetchWithAuth(
+      `${API_BASE}/api/conversations/${conversationId}/models?profile_id=${profileId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          council_models: councilModels,
+          chairman_model: chairmanModel,
+        }),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to update conversation models');
     }
     return response.json();
   },
