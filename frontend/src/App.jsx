@@ -6,6 +6,8 @@ import AboutModal from './components/AboutModal';
 import { api, API_BASE } from './api';
 import { isAuthenticated, getCurrentUser, setAuth, clearAuth, getProfileIdKey } from './auth';
 import { useQueryState } from './queryState.jsx';
+import { createStreamEventHandler, ensureAssistantMessage } from './eventHandler';
+import { SPECIAL_EVENTS } from './stageConfig';
 import './App.css';
 
 function App() {
@@ -427,217 +429,125 @@ function App() {
       // If retrying (skipAddingUserMessage=true), don't create assistant message yet
       // Backend will create it via save_partial_assistant_message() and we'll get it via events
 
+      // Create dynamic event handler
+      const streamEventHandler = createStreamEventHandler({
+        updateQueryState: queryState.updateStageStatus,
+        setConversation: setCurrentConversation
+      });
+
       // Send message with streaming and reconnection handler
       await api.sendMessageStream(
         currentConversationId,
         content,
         controller.signal,
         (eventType, event) => {
-        switch (eventType) {
-          case 'stage1_start':
-            queryState.updateStageStatus(currentConversationId, 'stage1', 'loading');
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
+          // Try dynamic handler first (handles all stage events)
+          const handled = streamEventHandler(eventType, event, currentConversationId);
 
-              // If last message is not assistant (retry scenario), create it
-              if (!lastMsg || lastMsg.role !== 'assistant') {
-                messages.push({
-                  role: 'assistant',
-                  stage1: null,
-                  stage1_5: null,
-                  stage2: null,
-                  stage3: null,
-                  metadata: null,
-                });
-              }
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_complete':
-            queryState.updateStageStatus(currentConversationId, 'stage1', 'complete');
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                stage1: event.data,
-              };
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_5_questions_start':
-            queryState.updateStageStatus(currentConversationId, 'stage1_5', 'loading');
-            break;
-
-          case 'stage1_5_questions_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              // Store questions, but keep loading indicator
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                stage1_5: {
-                  ...(lastMsg.stage1_5 || {}),
-                  questions: event.data
-                }
-              };
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_5_answers_start':
-            // Keep loading indicator
-            break;
-
-          case 'stage1_5_answers_complete':
-            queryState.updateStageStatus(currentConversationId, 'stage1_5', 'complete');
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              // Add answers and complete stage1_5
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                stage1_5: {
-                  ...(lastMsg.stage1_5 || {}),
-                  answers: event.data,
-                  label_to_model: event.label_to_model
-                },
-              };
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage2_start':
-            queryState.updateStageStatus(currentConversationId, 'stage2', 'loading');
-            break;
-
-          case 'stage2_complete':
-            queryState.updateStageStatus(currentConversationId, 'stage2', 'complete');
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                stage2: event.data,
-                metadata: event.metadata,
-              };
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage3_start':
-            queryState.updateStageStatus(currentConversationId, 'stage3', 'loading');
-            break;
-
-          case 'stage3_complete':
-            queryState.updateStageStatus(currentConversationId, 'stage3', 'complete');
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              messages[messages.length - 1] = {
-                ...lastMsg,
-                stage3: event.data,
-              };
-              return { ...prev, messages };
-            });
-            // Clear loading state immediately after stage3 completes
-            // Don't wait for 'complete' event which may be delayed
-            setIsLoading(false);
-            break;
-
-          case 'title_complete':
-            // Optimistically update the title in local state
-            if (event.data && event.data.title) {
-              const newTitle = event.data.title;
-
-              // Update conversations list
-              setConversations((prev) =>
-                prev.map((conv) =>
-                  conv.id === currentConversationId
-                    ? { ...conv, title: newTitle }
-                    : conv
-                )
-              );
-
-              // Update current conversation if it matches
-              setCurrentConversation((prev) =>
-                prev && prev.id === currentConversationId
-                  ? { ...prev, title: newTitle }
-                  : prev
-              );
+          if (handled) {
+            // Special handling for stage1_start to ensure assistant message exists
+            if (eventType === 'stage1_start') {
+              ensureAssistantMessage(setCurrentConversation);
             }
+            // Special handling for stage3_complete to clear loading state early
+            else if (eventType === 'stage3_complete') {
+              setIsLoading(false);
+            }
+            return;
+          }
 
-            // Still reload to ensure eventual convergence
-            loadConversations();
-            break;
+          // Handle special events that dynamic handler doesn't manage
+          switch (eventType) {
+            case SPECIAL_EVENTS.TITLE_COMPLETE:
+              // Optimistically update the title in local state
+              if (event.data && event.data.title) {
+                const newTitle = event.data.title;
 
-          case 'complete':
-            // Stream complete, mark query as complete
-            queryState.completeQuery(currentConversationId);
-            loadConversations();
-            setIsLoading(false);
-            setAbortController(null);
-            break;
+                // Update conversations list
+                setConversations((prev) =>
+                  prev.map((conv) =>
+                    conv.id === currentConversationId
+                      ? { ...conv, title: newTitle }
+                      : conv
+                  )
+                );
 
-          case 'error':
-            console.error('Stream error:', event.message);
-            queryState.cancelQuery(currentConversationId);
-            setIsLoading(false);
-            setAbortController(null);
-            break;
+                // Update current conversation if it matches
+                setCurrentConversation((prev) =>
+                  prev && prev.id === currentConversationId
+                    ? { ...prev, title: newTitle }
+                    : prev
+                );
+              }
 
-          case 'heartbeat':
-            // Keepalive event, no action needed
-            console.log('[Stream] Heartbeat received at', new Date(event.timestamp * 1000));
-            break;
+              // Still reload to ensure eventual convergence
+              loadConversations();
+              break;
 
-          case 'reconnected':
-            // Stream resumed after network interruption
-            console.log('[Stream] Reconnected! Resumed from stage:', event.last_stage);
-            setReconnectionStatus(null); // Clear reconnection status
-            // Continue processing remaining stages normally
-            break;
+            case SPECIAL_EVENTS.COMPLETE:
+              // Stream complete, mark query as complete
+              queryState.completeQuery(currentConversationId);
+              loadConversations();
+              setIsLoading(false);
+              setAbortController(null);
+              break;
 
-          case 'auth_expired':
-            // Token expired or user logged out elsewhere during stream
-            console.log('[Stream] Auth expired:', event.reason);
-            setIsLoading(false);
-            setAbortController(null);
-            setReconnectionStatus(null);
+            case SPECIAL_EVENTS.ERROR:
+              console.error('Stream error:', event.message);
+              queryState.cancelQuery(currentConversationId);
+              setIsLoading(false);
+              setAbortController(null);
+              break;
 
-            if (event.reason === 'logged_out') {
-              // User logged out elsewhere
-              alert(event.message || 'Session ended. Please log in again.');
-              handleLogout();
-            } else {
-              // Token expired - try to refresh
-              console.log('[Stream] Attempting to refresh token...');
-              api.refreshAccessToken()
-                .then(refreshed => {
-                  if (refreshed) {
-                    console.log('[Stream] Token refreshed, stream can be retried');
-                    // Note: User can manually retry with the retry button
-                  } else {
-                    console.log('[Stream] Token refresh failed, logging out');
+            case SPECIAL_EVENTS.HEARTBEAT:
+              // Keepalive event, no action needed
+              console.log('[Stream] Heartbeat received at', new Date(event.timestamp * 1000));
+              break;
+
+            case SPECIAL_EVENTS.RECONNECTED:
+              // Stream resumed after network interruption
+              console.log('[Stream] Reconnected! Resumed from stage:', event.last_stage);
+              setReconnectionStatus(null); // Clear reconnection status
+              // Continue processing remaining stages normally
+              break;
+
+            case SPECIAL_EVENTS.AUTH_EXPIRED:
+              // Token expired or user logged out elsewhere during stream
+              console.log('[Stream] Auth expired:', event.reason);
+              setIsLoading(false);
+              setAbortController(null);
+              setReconnectionStatus(null);
+
+              if (event.reason === 'logged_out') {
+                // User logged out elsewhere
+                alert(event.message || 'Session ended. Please log in again.');
+                handleLogout();
+              } else {
+                // Token expired - try to refresh
+                console.log('[Stream] Attempting to refresh token...');
+                api.refreshAccessToken()
+                  .then(refreshed => {
+                    if (refreshed) {
+                      console.log('[Stream] Token refreshed, stream can be retried');
+                      // Note: User can manually retry with the retry button
+                    } else {
+                      console.log('[Stream] Token refresh failed, logging out');
+                      alert('Session expired. Please log in again.');
+                      handleLogout();
+                    }
+                  })
+                  .catch(err => {
+                    console.error('[Stream] Token refresh error:', err);
                     alert('Session expired. Please log in again.');
                     handleLogout();
-                  }
-                })
-                .catch(err => {
-                  console.error('[Stream] Token refresh error:', err);
-                  alert('Session expired. Please log in again.');
-                  handleLogout();
-                });
-            }
-            break;
+                  });
+              }
+              break;
 
-          default:
-            console.log('Unknown event type:', eventType);
-        }
-      },
+            default:
+              console.log('Unknown event type:', eventType);
+          }
+        },
       // Reconnection callback
       (attempt, maxAttempts, delay) => {
         console.log(`[Stream] Reconnection attempt ${attempt}/${maxAttempts} in ${delay}ms`);

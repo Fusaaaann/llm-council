@@ -5,7 +5,31 @@ import Stage1_5 from './Stage1_5';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import ModelConfig from './ModelConfig';
+import { STAGES } from '../stageConfig';
 import './ChatInterface.css';
+
+// Map stage names to their components
+const STAGE_COMPONENTS = {
+  stage1: Stage1,
+  stage1_5: Stage1_5,
+  stage2: Stage2,
+  stage3: Stage3
+};
+
+// Map stage names to their component props
+const STAGE_PROPS_MAPPER = {
+  stage1: (msg) => ({ responses: msg.stage1 }),
+  stage1_5: (msg) => ({
+    interrogationData: msg.stage1_5,
+    labelToModel: msg.stage1_5?.label_to_model
+  }),
+  stage2: (msg) => ({
+    rankings: msg.stage2,
+    labelToModel: msg.metadata?.label_to_model,
+    aggregateRankings: msg.metadata?.aggregate_rankings
+  }),
+  stage3: (msg) => ({ finalResponse: msg.stage3 })
+};
 
 export default function ChatInterface({
   conversation,
@@ -117,52 +141,29 @@ export default function ChatInterface({
                 <div className="assistant-message">
                   <div className="message-label">LLM Council</div>
 
-                  {/* Stage 1 */}
-                  {queryState?.stages.stage1?.status === 'loading' && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 1: Collecting individual responses...</span>
-                    </div>
-                  )}
-                  {msg.stage1 && <Stage1 responses={msg.stage1} />}
+                  {/* Dynamically render all stages from configuration */}
+                  {STAGES.map((stageConfig) => {
+                    const StageComponent = STAGE_COMPONENTS[stageConfig.name];
+                    const hasData = msg[stageConfig.messageField];
+                    const isLoading = queryState?.stages[stageConfig.name]?.status === 'loading';
 
-                  {/* Stage 1.5 */}
-                  {queryState?.stages.stage1_5?.status === 'loading' && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 1.5: Cross-interrogation...</span>
-                    </div>
-                  )}
-                  {msg.stage1_5 && (
-                    <Stage1_5
-                      interrogationData={msg.stage1_5}
-                      labelToModel={msg.stage1_5?.label_to_model}
-                    />
-                  )}
+                    return (
+                      <div key={stageConfig.name}>
+                        {/* Loading indicator */}
+                        {isLoading && (
+                          <div className="stage-loading">
+                            <div className="spinner"></div>
+                            <span>{stageConfig.label}: {stageConfig.loadingMessage}</span>
+                          </div>
+                        )}
 
-                  {/* Stage 2 */}
-                  {queryState?.stages.stage2?.status === 'loading' && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 2: Peer rankings...</span>
-                    </div>
-                  )}
-                  {msg.stage2 && (
-                    <Stage2
-                      rankings={msg.stage2}
-                      labelToModel={msg.metadata?.label_to_model}
-                      aggregateRankings={msg.metadata?.aggregate_rankings}
-                    />
-                  )}
-
-                  {/* Stage 3 */}
-                  {queryState?.stages.stage3?.status === 'loading' && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 3: Final synthesis...</span>
-                    </div>
-                  )}
-                  {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
+                        {/* Stage content */}
+                        {hasData && StageComponent && (
+                          <StageComponent {...STAGE_PROPS_MAPPER[stageConfig.name](msg)} />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

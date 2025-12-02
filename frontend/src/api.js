@@ -44,8 +44,18 @@ function getAuthHeaders() {
   return headers;
 }
 
-// Refresh access token
+// Token refresh lock - prevents race conditions when multiple requests detect 401 simultaneously
+// This ensures only one refresh happens at a time, and all waiting requests share the result
+let refreshPromise = null;
+
+// Refresh access token with deduplication
 async function refreshAccessToken() {
+  // If a refresh is already in progress, wait for it instead of starting a new one
+  if (refreshPromise) {
+    console.log('[API] Token refresh already in progress, waiting for existing request...');
+    return refreshPromise;
+  }
+
   const refreshToken = getRefreshToken();
   if (!refreshToken) {
     console.warn('[API] No refresh token available');
@@ -54,58 +64,66 @@ async function refreshAccessToken() {
 
   console.log('[API] Attempting token refresh with token:', refreshToken.substring(0, 20) + '...');
 
-  try {
-    const response = await fetch(`${API_BASE}/api/auth/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    if (!response.ok) {
-      // Enhanced error logging
-      const errorDetail = await parseErrorResponse(response);
-      console.error('[API] Token refresh failed:', {
-        status: response.status,
-        statusText: response.statusText,
-        detail: errorDetail
+  // Create new refresh promise and store it
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
-      // Specific handling for different error types
-      if (response.status === 401) {
-        console.error('[API] Refresh token invalid or expired - reasons could be:');
-        console.error('  - Token already used (rotation security)');
-        console.error('  - Token expired (7 day default)');
-        console.error('  - Session revoked on server');
-        console.error('  - Token not found in session store');
-        // Clear auth to force re-login
-        clearAuth();
-      } else if (response.status === 429) {
-        console.error('[API] Rate limit exceeded - too many refresh attempts');
+      if (!response.ok) {
+        // Enhanced error logging
+        const errorDetail = await parseErrorResponse(response);
+        console.error('[API] Token refresh failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          detail: errorDetail
+        });
+
+        // Specific handling for different error types
+        if (response.status === 401) {
+          console.error('[API] Refresh token invalid or expired - reasons could be:');
+          console.error('  - Token already used (rotation security)');
+          console.error('  - Token expired (7 day default)');
+          console.error('  - Session revoked on server');
+          console.error('  - Token not found in session store');
+          // Clear auth to force re-login
+          clearAuth();
+        } else if (response.status === 429) {
+          console.error('[API] Rate limit exceeded - too many refresh attempts');
+        }
+
+        return false;
       }
 
+      const data = await response.json();
+      console.log('[API] Token refresh successful, updating tokens');
+      console.log('[API] New access token received');
+      console.log('[API] New refresh token received:', !!data.refresh_token);
+
+      updateAccessToken(data.access_token);
+      // IMPORTANT: Backend rotates refresh tokens (single-use), must store new one
+      if (data.refresh_token) {
+        updateRefreshToken(data.refresh_token);
+        console.log('[API] Refresh token rotated and stored');
+      } else {
+        console.warn('[API] No new refresh token in response - token rotation may be disabled');
+      }
+      return true;
+    } catch (error) {
+      console.error('[API] Token refresh error (network or parsing):', error);
       return false;
+    } finally {
+      // Clear the lock after completion (success or failure)
+      refreshPromise = null;
     }
+  })();
 
-    const data = await response.json();
-    console.log('[API] Token refresh successful, updating tokens');
-    console.log('[API] New access token received');
-    console.log('[API] New refresh token received:', !!data.refresh_token);
-
-    updateAccessToken(data.access_token);
-    // IMPORTANT: Backend rotates refresh tokens (single-use), must store new one
-    if (data.refresh_token) {
-      updateRefreshToken(data.refresh_token);
-      console.log('[API] Refresh token rotated and stored');
-    } else {
-      console.warn('[API] No new refresh token in response - token rotation may be disabled');
-    }
-    return true;
-  } catch (error) {
-    console.error('[API] Token refresh error (network or parsing):', error);
-    return false;
-  }
+  return refreshPromise;
 }
 
 // Enhanced fetch with automatic token refresh

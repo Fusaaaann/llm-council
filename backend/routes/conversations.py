@@ -10,6 +10,7 @@ import time
 from urllib.parse import quote
 
 from .. import config, storage, auth
+from ..stage_config import STAGES, SPECIAL_EVENTS, get_stage_config
 from ..council import (
     stage1_collect_responses,
     stage1_5_cross_interrogation,
@@ -612,6 +613,10 @@ async def send_message_stream(
                 title_task = None
                 if is_first_message:
                     title_task = asyncio.create_task(generate_conversation_title(req.content))
+
+                # NOTE: Event names are now defined in stage_config.py for consistency
+                # with frontend. You can use: get_stage_config("stage1").event_start
+                # instead of hardcoded strings for better maintainability.
 
                 # Stage 1: Collect responses
                 yield send_event('stage1_start', stage='stage1')
