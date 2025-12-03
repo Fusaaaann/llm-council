@@ -125,6 +125,13 @@ function App() {
 
         console.error('[SSE] Failed to subscribe:', error);
 
+        // Check if error is authentication-related (401 after refresh attempt)
+        if (error.message && error.message.includes('Authentication expired')) {
+          console.log('[App] Authentication expired in SSE subscription, logging out');
+          handleLogout();
+          return;
+        }
+
         // Fallback to initial load
         loadConversations();
 
@@ -158,6 +165,12 @@ function App() {
       setConversations(convs);
     } catch (error) {
       console.error('Failed to load conversations:', error);
+
+      // Check if error is authentication-related (401 after refresh attempt)
+      if (error.message && error.message.includes('Authentication expired')) {
+        console.log('[App] Authentication expired while loading conversations, logging out');
+        handleLogout();
+      }
     }
   };
 
