@@ -1,26 +1,24 @@
-"""Authentication and session management."""
+"""Authentication and session management with SQLite backend.
+
+This module is 100% API-compatible with auth.py but uses SQLite instead of JSON files.
+"""
 
 import os
 import json
-import hashlib
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from pathlib import Path
 import jwt
 from passlib.hash import bcrypt
 from .encryption import FernetProvider, encrypt_data, decrypt_data, create_encryption_metadata, is_encrypted
 from .config import ENCRYPTION_ENABLED, ENCRYPTION_KEY
+from .storage import get_db_connection, init_database
 
 # JWT Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
-
-# Storage paths
-USERS_FILE = "data/users.json"
-SESSIONS_FILE = "data/sessions.json"
 
 
 def get_encryption_provider() -> Optional[FernetProvider]:
@@ -40,97 +38,171 @@ def get_encryption_provider() -> Optional[FernetProvider]:
 
 
 def ensure_auth_files():
-    """Ensure authentication data files exist."""
-    Path("data").mkdir(parents=True, exist_ok=True)
+    """Ensure authentication tables exist (compatibility with auth.py)."""
+    init_database()
 
-    if not os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'w') as f:
-            json.dump({}, f, indent=2)
 
-    if not os.path.exists(SESSIONS_FILE):
-        with open(SESSIONS_FILE, 'w') as f:
-            json.dump({}, f, indent=2)
-
+# ============================================================================
+# USER FUNCTIONS
+# ============================================================================
 
 def load_users() -> Dict[str, Any]:
-    """Load users from file, decrypting if necessary."""
-    ensure_auth_files()
-    with open(USERS_FILE, 'r') as f:
-        data = json.load(f)
+    """Load all users from database, decrypting if necessary."""
+    init_database()
+    users = {}
 
-    # Check if data is encrypted
-    if isinstance(data, dict) and is_encrypted(data):
-        provider = get_encryption_provider()
-        if provider is None:
-            raise ValueError("Encrypted users file found but encryption is disabled")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data FROM users")
 
-        # Decrypt users data
-        if "data_encrypted" in data:
-            try:
-                return decrypt_data(data["data_encrypted"], provider)
-            except ValueError as e:
-                raise ValueError(f"Failed to decrypt users file: {e}")
+        for row in cursor.fetchall():
+            user_json = row['data']
 
-    return data
+            # Check if data is encrypted
+            if user_json.startswith('{') and '"_encryption"' in user_json:
+                data = json.loads(user_json)
+                if is_encrypted(data):
+                    provider = get_encryption_provider()
+                    if provider is None:
+                        raise ValueError("Encrypted user data found but encryption is disabled")
+
+                    # Decrypt user data
+                    if "data_encrypted" in data:
+                        try:
+                            user = decrypt_data(data["data_encrypted"], provider)
+                            users[user["id"]] = user
+                        except ValueError as e:
+                            raise ValueError(f"Failed to decrypt user data: {e}")
+                else:
+                    # Not encrypted but has the structure, extract the user
+                    user = json.loads(user_json)
+                    users[user["id"]] = user
+            else:
+                # Plain JSON user object
+                user = json.loads(user_json)
+                users[user["id"]] = user
+
+    return users
 
 
 def save_users(users: Dict[str, Any]):
-    """Save users to file, encrypting if enabled."""
-    ensure_auth_files()
+    """Save all users to database, encrypting if enabled."""
+    init_database()
 
     provider = get_encryption_provider()
-    if provider is not None:
-        # Encrypt the users data
-        data_to_save = {
-            "_encryption": create_encryption_metadata(provider),
-            "data_encrypted": encrypt_data(users, provider)
-        }
-    else:
-        data_to_save = users
 
-    with open(USERS_FILE, 'w') as f:
-        json.dump(data_to_save, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
 
+        for user_id, user in users.items():
+            # Prepare data to save
+            if provider is not None:
+                # Encrypt the user data
+                data_to_save = {
+                    "_encryption": create_encryption_metadata(provider),
+                    "data_encrypted": encrypt_data(user, provider)
+                }
+                data_json = json.dumps(data_to_save)
+            else:
+                data_json = json.dumps(user)
+
+            # Insert or replace user
+            cursor.execute(
+                """INSERT OR REPLACE INTO users (id, email, created_at, data)
+                   VALUES (?, ?, ?, ?)""",
+                (user_id, user.get("email", ""), user.get("created_at", datetime.utcnow().isoformat()), data_json)
+            )
+
+        conn.commit()
+
+
+# ============================================================================
+# SESSION FUNCTIONS
+# ============================================================================
 
 def load_sessions() -> Dict[str, Any]:
-    """Load sessions from file, decrypting if necessary."""
-    ensure_auth_files()
-    with open(SESSIONS_FILE, 'r') as f:
-        data = json.load(f)
+    """Load all sessions from database, decrypting if necessary."""
+    init_database()
+    sessions = {}
 
-    # Check if data is encrypted
-    if isinstance(data, dict) and is_encrypted(data):
-        provider = get_encryption_provider()
-        if provider is None:
-            raise ValueError("Encrypted sessions file found but encryption is disabled")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT token, data FROM sessions")
 
-        # Decrypt sessions data
-        if "data_encrypted" in data:
-            try:
-                return decrypt_data(data["data_encrypted"], provider)
-            except ValueError as e:
-                raise ValueError(f"Failed to decrypt sessions file: {e}")
+        for row in cursor.fetchall():
+            token = row['token']
+            session_json = row['data']
 
-    return data
+            # Check if data is encrypted
+            if session_json.startswith('{') and '"_encryption"' in session_json:
+                data = json.loads(session_json)
+                if is_encrypted(data):
+                    provider = get_encryption_provider()
+                    if provider is None:
+                        raise ValueError("Encrypted session data found but encryption is disabled")
+
+                    # Decrypt session data
+                    if "data_encrypted" in data:
+                        try:
+                            session = decrypt_data(data["data_encrypted"], provider)
+                            sessions[token] = session
+                        except ValueError as e:
+                            raise ValueError(f"Failed to decrypt session data: {e}")
+                else:
+                    # Not encrypted, extract the session
+                    session = json.loads(session_json)
+                    sessions[token] = session
+            else:
+                # Plain JSON session object
+                session = json.loads(session_json)
+                sessions[token] = session
+
+    return sessions
 
 
 def save_sessions(sessions: Dict[str, Any]):
-    """Save sessions to file, encrypting if enabled."""
-    ensure_auth_files()
+    """Save all sessions to database, encrypting if enabled."""
+    init_database()
 
     provider = get_encryption_provider()
-    if provider is not None:
-        # Encrypt the sessions data
-        data_to_save = {
-            "_encryption": create_encryption_metadata(provider),
-            "data_encrypted": encrypt_data(sessions, provider)
-        }
-    else:
-        data_to_save = sessions
 
-    with open(SESSIONS_FILE, 'w') as f:
-        json.dump(data_to_save, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
 
+        # Clear existing sessions
+        cursor.execute("DELETE FROM sessions")
+
+        # Insert all sessions
+        for token, session in sessions.items():
+            # Prepare data to save
+            if provider is not None:
+                # Encrypt the session data
+                data_to_save = {
+                    "_encryption": create_encryption_metadata(provider),
+                    "data_encrypted": encrypt_data(session, provider)
+                }
+                data_json = json.dumps(data_to_save)
+            else:
+                data_json = json.dumps(session)
+
+            cursor.execute(
+                """INSERT INTO sessions (token, user_id, created_at, expires_at, data)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    token,
+                    session.get("user_id", ""),
+                    session.get("created_at", datetime.utcnow().isoformat()),
+                    session.get("expires_at", ""),
+                    data_json
+                )
+            )
+
+        conn.commit()
+
+
+# ============================================================================
+# PASSWORD FUNCTIONS
+# ============================================================================
 
 def hash_password(password: str) -> str:
     """
@@ -154,6 +226,10 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.verify(password_bytes.decode('utf-8', errors='ignore'), hashed)
 
 
+# ============================================================================
+# TOKEN GENERATION
+# ============================================================================
+
 def generate_user_id() -> str:
     """Generate a unique user ID."""
     return secrets.token_urlsafe(16)
@@ -163,6 +239,10 @@ def generate_refresh_token() -> str:
     """Generate a secure refresh token."""
     return secrets.token_urlsafe(32)
 
+
+# ============================================================================
+# JWT TOKEN FUNCTIONS
+# ============================================================================
 
 def create_access_token(user_id: str, profile_id: str) -> str:
     """
@@ -328,7 +408,9 @@ def revoke_all_sessions():
     save_sessions({})
 
 
-# Connection token management (for streaming sessions)
+# ============================================================================
+# CONNECTION TOKEN FUNCTIONS (for streaming)
+# ============================================================================
 
 CONNECTION_TOKEN_EXPIRE_MINUTES = 30
 
@@ -440,6 +522,10 @@ def cleanup_expired_connection_tokens():
         print(f"[INFO] Cleaned up {len(expired_keys)} expired connection tokens")
 
 
+# ============================================================================
+# USER MANAGEMENT
+# ============================================================================
+
 def create_user(email: str, password: str, name: str, invite_token: Optional[str] = None) -> Dict[str, Any]:
     """
     Create a new user account.
@@ -465,7 +551,7 @@ def create_user(email: str, password: str, name: str, invite_token: Optional[str
 
     # Validate invite token if provided
     if invite_token:
-        from . import storage
+        from . import  storage
         is_valid, error = storage.validate_invite_token(invite_token)
         if not is_valid:
             raise ValueError(error)
@@ -476,7 +562,7 @@ def create_user(email: str, password: str, name: str, invite_token: Optional[str
     user_id = generate_user_id()
 
     # Create default profile for user
-    from . import storage
+    from . import  storage
     profile_id = f"profile_{user_id}"
     storage.create_profile(profile_id, f"{name}'s Profile", {})
 

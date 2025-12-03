@@ -1,11 +1,17 @@
-"""JSON-based storage for conversations with encryption support."""
+"""SQLite-based storage for conversations with encryption support.
+
+This module is 100% API-compatible with storage.py but uses SQLite instead of JSON files.
+Conversations and profiles are stored in data/data.sqlite, while waitlist/invites remain in JSON.
+"""
 
 import json
 import os
+import sqlite3
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from .config import DATA_DIR, PROFILES_FILE, DEFAULT_PROFILE_ID, ENCRYPTION_ENABLED, ENCRYPTION_KEY, WAITLIST_FILE, INVITES_FILE
+from contextlib import contextmanager
+from .config import DATA_DIR, DEFAULT_PROFILE_ID, ENCRYPTION_ENABLED, ENCRYPTION_KEY, WAITLIST_FILE, INVITES_FILE
 from .encryption import (
     FernetProvider,
     encrypt_data,
@@ -14,10 +20,125 @@ from .encryption import (
     is_encrypted
 )
 
+# Database path
+DB_PATH = "data/data.sqlite"
+
+
+@contextmanager
+def get_db_connection():
+    """Get a thread-safe database connection with context manager."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row  # Enable column access by name
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_database():
+    """Initialize the database schema if it doesn't exist."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Conversations table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                modified_at TEXT,
+                title TEXT,
+                is_public BOOLEAN DEFAULT 0,
+                uses_byok BOOLEAN DEFAULT 0,
+                data TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_profile_id
+            ON conversations(profile_id)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_created_at
+            ON conversations(created_at)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_is_public
+            ON conversations(is_public)
+        """)
+
+        # Profiles table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
+
+        # Users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_email
+            ON users(email)
+        """)
+
+        # Sessions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                data TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+            ON sessions(user_id)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+            ON sessions(expires_at)
+        """)
+
+        conn.commit()
+
+        # Create default profile if it doesn't exist
+        cursor.execute("SELECT id FROM profiles WHERE id = ?", (DEFAULT_PROFILE_ID,))
+        if not cursor.fetchone():
+            default_profile = {
+                "id": DEFAULT_PROFILE_ID,
+                "name": "Default Profile",
+                "created_at": datetime.utcnow().isoformat(),
+                "settings": {}
+            }
+            cursor.execute(
+                "INSERT INTO profiles (id, name, created_at, data) VALUES (?, ?, ?, ?)",
+                (DEFAULT_PROFILE_ID, "Default Profile", default_profile["created_at"], json.dumps(default_profile))
+            )
+            conn.commit()
+
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    init_database()
 
 
 def get_encryption_provider() -> Optional[FernetProvider]:
@@ -36,34 +157,9 @@ def get_encryption_provider() -> Optional[FernetProvider]:
     return FernetProvider(ENCRYPTION_KEY.encode('utf-8'))
 
 
-def ensure_profiles_file():
-    """Ensure the profiles file exists."""
-    Path(PROFILES_FILE).parent.mkdir(parents=True, exist_ok=True)
-    if not os.path.exists(PROFILES_FILE):
-        # Create default profile
-        profiles = {
-            DEFAULT_PROFILE_ID: {
-                "id": DEFAULT_PROFILE_ID,
-                "name": "Default Profile",
-                "created_at": datetime.utcnow().isoformat(),
-                "settings": {}
-            }
-        }
-        with open(PROFILES_FILE, 'w') as f:
-            json.dump(profiles, f, indent=2)
-
-
-def get_profile_dir(profile_id: str) -> str:
-    """Get the directory for a profile's conversations."""
-    return os.path.join(DATA_DIR, f"profile_{profile_id}")
-
-
-def get_conversation_path(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> str:
-    """Get the file path for a conversation."""
-    profile_dir = get_profile_dir(profile_id)
-    Path(profile_dir).mkdir(parents=True, exist_ok=True)
-    return os.path.join(profile_dir, f"{conversation_id}.json")
-
+# ============================================================================
+# CONVERSATION FUNCTIONS
+# ============================================================================
 
 def create_conversation(
     conversation_id: str,
@@ -104,10 +200,23 @@ def create_conversation(
         "chairman_model": chairman_model if chairman_model is not None else CHAIRMAN_MODEL
     }
 
-    # Save to file (only if public in production, always in local mode)
-    path = get_conversation_path(conversation_id, profile_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO conversations
+               (id, profile_id, created_at, title, is_public, uses_byok, data)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                conversation_id,
+                profile_id,
+                conversation["created_at"],
+                conversation["title"],
+                1 if conversation["is_public"] else 0,
+                1 if uses_byok else 0,
+                json.dumps(conversation)
+            )
+        )
+        conn.commit()
 
     return conversation
 
@@ -123,13 +232,18 @@ def get_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID)
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id, profile_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE id = ? AND profile_id = ?",
+            (conversation_id, profile_id)
+        )
+        row = cursor.fetchone()
 
-    if not os.path.exists(path):
-        return None
+        if not row:
+            return None
 
-    with open(path, 'r') as f:
-        data = json.load(f)
+        data = json.loads(row['data'])
 
     # Check if data is encrypted
     if is_encrypted(data):
@@ -190,9 +304,23 @@ def save_conversation(conversation: Dict[str, Any], profile_id: str = None):
         # Add encryption metadata
         data_to_save["_encryption"] = create_encryption_metadata(provider)
 
-    path = get_conversation_path(conversation['id'], profile_id)
-    with open(path, 'w') as f:
-        json.dump(data_to_save, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE conversations
+               SET data = ?, modified_at = ?, title = ?, is_public = ?, uses_byok = ?
+               WHERE id = ? AND profile_id = ?""",
+            (
+                json.dumps(data_to_save),
+                data_to_save["modified_at"],
+                data_to_save.get("title", "New Conversation"),
+                1 if data_to_save.get("is_public", False) else 0,
+                1 if data_to_save.get("uses_byok", False) else 0,
+                conversation['id'],
+                profile_id
+            )
+        )
+        conn.commit()
 
 
 def list_conversations(profile_id: str = DEFAULT_PROFILE_ID, view: str = "private") -> List[Dict[str, Any]]:
@@ -214,40 +342,41 @@ def list_conversations(profile_id: str = DEFAULT_PROFILE_ID, view: str = "privat
 
     # Get user's own conversations
     conversations = []
-    profile_dir = get_profile_dir(profile_id)
 
-    if os.path.exists(profile_dir):
-        for filename in os.listdir(profile_dir):
-            if filename.endswith('.json'):
-                path = os.path.join(profile_dir, filename)
-                with open(path, 'r') as f:
-                    data = json.load(f)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE profile_id = ? ORDER BY created_at DESC",
+            (profile_id,)
+        )
 
-                    # Get message count (handles both encrypted and unencrypted)
-                    if "messages" in data:
-                        message_count = len(data["messages"])
-                    elif "messages_encrypted" in data:
-                        # For encrypted data, we need to decrypt to count
-                        # But for performance, we can skip this and show "?" or fetch full conversation
-                        # For now, we'll get the full conversation which will decrypt
-                        full_conv = get_conversation(data["id"], profile_id)
-                        message_count = len(full_conv.get("messages", []))
-                    else:
-                        message_count = 0
+        for row in cursor.fetchall():
+            data = json.loads(row['data'])
 
-                    # Return metadata only
-                    conversations.append({
-                        "id": data["id"],
-                        "profile_id": profile_id,
-                        "created_at": data["created_at"],
-                        "modified_at": data.get("modified_at", data["created_at"]),
-                        "title": data.get("title", "New Conversation"),
-                        "message_count": message_count,
-                        "is_loading": data.get("is_loading", False),
-                        "is_public": data.get("is_public", False),
-                        "sync_status": data.get("sync_status", "local"),
-                        "uses_byok": data.get("uses_byok", False)
-                    })
+            # Get message count (handles both encrypted and unencrypted)
+            if "messages" in data:
+                message_count = len(data["messages"])
+            elif "messages_encrypted" in data:
+                # For encrypted data, we need to decrypt to count
+                # But for performance, we can skip this and get the full conversation
+                full_conv = get_conversation(data["id"], profile_id)
+                message_count = len(full_conv.get("messages", []))
+            else:
+                message_count = 0
+
+            # Return metadata only
+            conversations.append({
+                "id": data["id"],
+                "profile_id": profile_id,
+                "created_at": data["created_at"],
+                "modified_at": data.get("modified_at", data["created_at"]),
+                "title": data.get("title", "New Conversation"),
+                "message_count": message_count,
+                "is_loading": data.get("is_loading", False),
+                "is_public": data.get("is_public", False),
+                "sync_status": data.get("sync_status", "local"),
+                "uses_byok": data.get("uses_byok", False)
+            })
 
     if view == "all":
         # Merge user's conversations with all public conversations
@@ -261,8 +390,8 @@ def list_conversations(profile_id: str = DEFAULT_PROFILE_ID, view: str = "privat
             if pub_conv["id"] not in existing_ids:
                 conversations.append(pub_conv)
 
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
+        # Sort by creation time, newest first
+        conversations.sort(key=lambda x: x["created_at"], reverse=True)
 
     return conversations
 
@@ -583,16 +712,19 @@ def delete_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_
     Returns:
         True if deleted, False if not found
     """
-    path = get_conversation_path(conversation_id, profile_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM conversations WHERE id = ? AND profile_id = ?",
+            (conversation_id, profile_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
-    if not os.path.exists(path):
-        return False
 
-    os.remove(path)
-    return True
-
-
-# Profile management functions
+# ============================================================================
+# PROFILE FUNCTIONS
+# ============================================================================
 
 def list_profiles() -> List[Dict[str, Any]]:
     """
@@ -601,12 +733,12 @@ def list_profiles() -> List[Dict[str, Any]]:
     Returns:
         List of profile dicts
     """
-    ensure_profiles_file()
+    ensure_data_dir()
 
-    with open(PROFILES_FILE, 'r') as f:
-        profiles = json.load(f)
-
-    return list(profiles.values())
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data FROM profiles")
+        return [json.loads(row['data']) for row in cursor.fetchall()]
 
 
 def get_profile(profile_id: str) -> Optional[Dict[str, Any]]:
@@ -619,12 +751,13 @@ def get_profile(profile_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Profile dict or None if not found
     """
-    ensure_profiles_file()
+    ensure_data_dir()
 
-    with open(PROFILES_FILE, 'r') as f:
-        profiles = json.load(f)
-
-    return profiles.get(profile_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data FROM profiles WHERE id = ?", (profile_id,))
+        row = cursor.fetchone()
+        return json.loads(row['data']) if row else None
 
 
 def create_profile(profile_id: str, name: str, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -639,12 +772,10 @@ def create_profile(profile_id: str, name: str, settings: Optional[Dict[str, Any]
     Returns:
         New profile dict
     """
-    ensure_profiles_file()
+    ensure_data_dir()
 
-    with open(PROFILES_FILE, 'r') as f:
-        profiles = json.load(f)
-
-    if profile_id in profiles:
+    # Check if profile already exists
+    if get_profile(profile_id) is not None:
         raise ValueError(f"Profile {profile_id} already exists")
 
     profile = {
@@ -654,10 +785,13 @@ def create_profile(profile_id: str, name: str, settings: Optional[Dict[str, Any]
         "settings": settings or {}
     }
 
-    profiles[profile_id] = profile
-
-    with open(PROFILES_FILE, 'w') as f:
-        json.dump(profiles, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO profiles (id, name, created_at, data) VALUES (?, ?, ?, ?)",
+            (profile_id, name, profile["created_at"], json.dumps(profile))
+        )
+        conn.commit()
 
     return profile
 
@@ -674,15 +808,11 @@ def update_profile(profile_id: str, name: Optional[str] = None, settings: Option
     Returns:
         Updated profile dict
     """
-    ensure_profiles_file()
+    ensure_data_dir()
 
-    with open(PROFILES_FILE, 'r') as f:
-        profiles = json.load(f)
-
-    if profile_id not in profiles:
+    profile = get_profile(profile_id)
+    if profile is None:
         raise ValueError(f"Profile {profile_id} not found")
-
-    profile = profiles[profile_id]
 
     if name is not None:
         profile["name"] = name
@@ -690,10 +820,13 @@ def update_profile(profile_id: str, name: Optional[str] = None, settings: Option
     if settings is not None:
         profile["settings"] = settings
 
-    profiles[profile_id] = profile
-
-    with open(PROFILES_FILE, 'w') as f:
-        json.dump(profiles, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE profiles SET name = ?, data = ? WHERE id = ?",
+            (profile["name"], json.dumps(profile), profile_id)
+        )
+        conn.commit()
 
     return profile
 
@@ -711,23 +844,18 @@ def delete_profile(profile_id: str) -> bool:
     if profile_id == DEFAULT_PROFILE_ID:
         raise ValueError("Cannot delete default profile")
 
-    ensure_profiles_file()
+    ensure_data_dir()
 
-    with open(PROFILES_FILE, 'r') as f:
-        profiles = json.load(f)
-
-    if profile_id not in profiles:
-        return False
-
-    del profiles[profile_id]
-
-    with open(PROFILES_FILE, 'w') as f:
-        json.dump(profiles, f, indent=2)
-
-    return True
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
-# Publish/unpublish functions
+# ============================================================================
+# PUBLISH/UNPUBLISH FUNCTIONS
+# ============================================================================
 
 def publish_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> Dict[str, Any]:
     """
@@ -793,39 +921,33 @@ def get_public_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     """
     ensure_data_dir()
 
-    if not os.path.exists(DATA_DIR):
-        return None
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE id = ? AND is_public = 1",
+            (conversation_id,)
+        )
+        row = cursor.fetchone()
 
-    # Search all profile directories for this conversation
-    for dirname in os.listdir(DATA_DIR):
-        if dirname.startswith("profile_"):
-            profile_dir = os.path.join(DATA_DIR, dirname)
-            if not os.path.isdir(profile_dir):
-                continue
+        if not row:
+            return None
 
-            conversation_path = os.path.join(profile_dir, f"{conversation_id}.json")
-            if os.path.exists(conversation_path):
-                # Found the conversation - load it
-                with open(conversation_path, 'r') as f:
-                    data = json.load(f)
+        data = json.loads(row['data'])
 
-                # Only return if it's public
-                if not data.get("is_public", False):
-                    return None
+        # Only return if it's public
+        if not data.get("is_public", False):
+            return None
 
-                # Decrypt if necessary
-                if is_encrypted(data):
-                    provider = get_encryption_provider()
-                    decrypted_messages = decrypt_data(data["messages_encrypted"], provider)
-                    data["messages"] = decrypted_messages
-                    # Remove encryption metadata from returned data
-                    data.pop("messages_encrypted", None)
-                    data.pop("_encryption", None)
+        # Decrypt if necessary
+        if is_encrypted(data):
+            provider = get_encryption_provider()
+            decrypted_messages = decrypt_data(data["messages_encrypted"], provider)
+            data["messages"] = decrypted_messages
+            # Remove encryption metadata from returned data
+            data.pop("messages_encrypted", None)
+            data.pop("_encryption", None)
 
-                return data
-
-    # Not found in any profile
-    return None
+        return data
 
 
 def list_public_conversations() -> List[Dict[str, Any]]:
@@ -839,44 +961,35 @@ def list_public_conversations() -> List[Dict[str, Any]]:
 
     public_conversations = []
 
-    # Iterate through all profile directories
-    if not os.path.exists(DATA_DIR):
-        return public_conversations
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data FROM conversations WHERE is_public = 1")
 
-    for dirname in os.listdir(DATA_DIR):
-        if dirname.startswith("profile_"):
-            profile_dir = os.path.join(DATA_DIR, dirname)
-            if not os.path.isdir(profile_dir):
-                continue
+        for row in cursor.fetchall():
+            data = json.loads(row['data'])
 
-            for filename in os.listdir(profile_dir):
-                if filename.endswith('.json'):
-                    path = os.path.join(profile_dir, filename)
-                    with open(path, 'r') as f:
-                        data = json.load(f)
+            # Only include public conversations
+            if data.get("is_public", False):
+                # Get message count (handles both encrypted and unencrypted)
+                if "messages" in data:
+                    message_count = len(data["messages"])
+                elif "messages_encrypted" in data:
+                    # For encrypted data, we need to decrypt to count
+                    # For performance, get the full conversation which will decrypt
+                    profile_id = data.get("profile_id", DEFAULT_PROFILE_ID)
+                    full_conv = get_conversation(data["id"], profile_id)
+                    message_count = len(full_conv.get("messages", []))
+                else:
+                    message_count = 0
 
-                        # Only include public conversations
-                        if data.get("is_public", False):
-                            # Get message count (handles both encrypted and unencrypted)
-                            if "messages" in data:
-                                message_count = len(data["messages"])
-                            elif "messages_encrypted" in data:
-                                # For encrypted data, we need to decrypt to count
-                                # For performance, get the full conversation which will decrypt
-                                profile_id = data.get("profile_id", DEFAULT_PROFILE_ID)
-                                full_conv = get_conversation(data["id"], profile_id)
-                                message_count = len(full_conv.get("messages", []))
-                            else:
-                                message_count = 0
-
-                            public_conversations.append({
-                                "id": data["id"],
-                                "profile_id": data.get("profile_id", DEFAULT_PROFILE_ID),
-                                "created_at": data["created_at"],
-                                "published_at": data.get("published_at"),
-                                "title": data.get("title", "New Conversation"),
-                                "message_count": message_count,
-                            })
+                public_conversations.append({
+                    "id": data["id"],
+                    "profile_id": data.get("profile_id", DEFAULT_PROFILE_ID),
+                    "created_at": data["created_at"],
+                    "published_at": data.get("published_at"),
+                    "title": data.get("title", "New Conversation"),
+                    "message_count": message_count,
+                })
 
     # Sort by publication time, newest first (handle None values)
     public_conversations.sort(
@@ -886,6 +999,10 @@ def list_public_conversations() -> List[Dict[str, Any]]:
 
     return public_conversations
 
+
+# ============================================================================
+# ENCRYPTION FUNCTIONS
+# ============================================================================
 
 def encrypt_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> Dict[str, Any]:
     """
@@ -905,14 +1022,19 @@ def encrypt_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    # Check if already encrypted
-    path = get_conversation_path(conversation_id, profile_id)
-    with open(path, 'r') as f:
-        raw_data = json.load(f)
-
-    if is_encrypted(raw_data):
-        # Already encrypted, return as-is
-        return conversation
+    # Check if already encrypted by loading raw data
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE id = ? AND profile_id = ?",
+            (conversation_id, profile_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            raw_data = json.loads(row['data'])
+            if is_encrypted(raw_data):
+                # Already encrypted, return as-is
+                return conversation
 
     # Get encryption provider
     provider = FernetProvider(ENCRYPTION_KEY.encode('utf-8'))
@@ -932,8 +1054,13 @@ def encrypt_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE
     data_to_save["_encryption"] = create_encryption_metadata(provider)
 
     # Save encrypted version
-    with open(path, 'w') as f:
-        json.dump(data_to_save, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE conversations SET data = ? WHERE id = ? AND profile_id = ?",
+            (json.dumps(data_to_save), conversation_id, profile_id)
+        )
+        conn.commit()
 
     # Return decrypted conversation for use
     return conversation
@@ -959,13 +1086,18 @@ def decrypt_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE
         raise ValueError(f"Conversation {conversation_id} not found")
 
     # Check if it's encrypted
-    path = get_conversation_path(conversation_id, profile_id)
-    with open(path, 'r') as f:
-        raw_data = json.load(f)
-
-    if not is_encrypted(raw_data):
-        # Already plaintext, return as-is
-        return conversation
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE id = ? AND profile_id = ?",
+            (conversation_id, profile_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            raw_data = json.loads(row['data'])
+            if not is_encrypted(raw_data):
+                # Already plaintext, return as-is
+                return conversation
 
     # Save without encryption (plaintext)
     data_to_save = conversation.copy()
@@ -977,8 +1109,13 @@ def decrypt_conversation(conversation_id: str, profile_id: str = DEFAULT_PROFILE
         del data_to_save["messages_encrypted"]
 
     # Save plaintext version
-    with open(path, 'w') as f:
-        json.dump(data_to_save, f, indent=2)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE conversations SET data = ? WHERE id = ? AND profile_id = ?",
+            (json.dumps(data_to_save), conversation_id, profile_id)
+        )
+        conn.commit()
 
     return conversation
 
@@ -997,13 +1134,18 @@ def get_conversation_encryption_status(conversation_id: str, profile_id: str = D
     Raises:
         ValueError: If conversation not found
     """
-    path = get_conversation_path(conversation_id, profile_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM conversations WHERE id = ? AND profile_id = ?",
+            (conversation_id, profile_id)
+        )
+        row = cursor.fetchone()
 
-    if not os.path.exists(path):
-        raise ValueError(f"Conversation {conversation_id} not found")
+        if not row:
+            raise ValueError(f"Conversation {conversation_id} not found")
 
-    with open(path, 'r') as f:
-        data = json.load(f)
+        data = json.loads(row['data'])
 
     encrypted = is_encrypted(data)
     provider = None
@@ -1020,7 +1162,9 @@ def get_conversation_encryption_status(conversation_id: str, profile_id: str = D
     }
 
 
-# Waitlist management functions
+# ============================================================================
+# WAITLIST FUNCTIONS (Keep JSON-based - readability for admin)
+# ============================================================================
 
 def ensure_waitlist_file():
     """Ensure the waitlist file exists."""
@@ -1124,7 +1268,9 @@ def mark_waitlist_invited(email: str) -> Dict[str, Any]:
     raise ValueError(f"Email {email} not found in waitlist")
 
 
-# Invite token management functions
+# ============================================================================
+# INVITE TOKEN FUNCTIONS (Keep JSON-based - readability for admin)
+# ============================================================================
 
 def ensure_invites_file():
     """Ensure the invites file exists."""
