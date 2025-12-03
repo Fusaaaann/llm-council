@@ -453,23 +453,25 @@ async def send_message(
         stage2_results, label_to_model = await stage2_collect_rankings(message_history, stage1_results, council_models)
         aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
 
-        # Stage 3: Synthesize final answer
-        stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model)
+        # Build stage1_5 data for Stage 3
+        stage1_5_data = {
+            'questions': questions_results,
+            'answers': answers_results,
+            'label_to_model': label_to_model_interrogation
+        }
+
+        # Stage 3: Synthesize final answer (with stage1_5 context)
+        stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
 
         # Wait for title if it was started
         if title_task:
             title = await title_task
             storage.update_conversation_title(conversation_id, title, pid)
 
-        # Build metadata and stage1_5 data
+        # Build metadata
         metadata = {
             'label_to_model': label_to_model,
             'aggregate_rankings': aggregate_rankings
-        }
-        stage1_5_data = {
-            'questions': questions_results,
-            'answers': answers_results,
-            'label_to_model': label_to_model_interrogation
         }
 
         # Add assistant message with all stages and metadata
@@ -730,9 +732,9 @@ async def send_message_stream(
                     if 'auth_expired' in heartbeat_event:
                         return
 
-                # Stage 3: Synthesize final answer
+                # Stage 3: Synthesize final answer (with stage1_5 context)
                 yield send_event('stage3_start', stage='stage3')
-                stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model)
+                stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
                 yield send_event('stage3_complete', stage3_result, 'stage3')
                 # Save partial state after stage3 (marks as complete, clears stream metadata)
                 storage.save_partial_assistant_message(
@@ -964,9 +966,9 @@ async def resume_message_stream(
                     )
 
                 elif stage == "stage3":
-                    # Stage 3: Final synthesis
+                    # Stage 3: Final synthesis (with stage1_5 context if available)
                     yield send_event('stage3_start', stage='stage3')
-                    stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model)
+                    stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
                     yield send_event('stage3_complete', stage3_result, 'stage3')
                     storage.save_partial_assistant_message(
                         conversation_id, "stage3", stage3_result,

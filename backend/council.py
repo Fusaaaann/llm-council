@@ -309,7 +309,8 @@ async def stage3_synthesize_final(
     messages: List[Dict[str, str]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    chairman_model: str
+    chairman_model: str,
+    stage1_5_results: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -319,6 +320,7 @@ async def stage3_synthesize_final(
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
         chairman_model: Model identifier for chairman
+        stage1_5_results: Cross-interrogation results from Stage 1.5 (optional)
 
     Returns:
         Dict with 'model' and 'response' keys
@@ -329,6 +331,26 @@ async def stage3_synthesize_final(
         for result in stage1_results
     ])
 
+    # Build stage1.5 context if available
+    stage1_5_text = ""
+    if stage1_5_results:
+        questions = stage1_5_results.get('questions', [])
+        answers = stage1_5_results.get('answers', [])
+
+        if questions:
+            stage1_5_text += "\n\nSTAGE 1.5 - Cross-Interrogation Questions:\n"
+            stage1_5_text += "\n\n".join([
+                f"Model: {q['model']}\nQuestions: {q['questions']}"
+                for q in questions
+            ])
+
+        if answers:
+            stage1_5_text += "\n\nSTAGE 1.5 - Cross-Interrogation Answers:\n"
+            stage1_5_text += "\n\n".join([
+                f"Model: {a['model']}\nAnswers: {a['answers']}"
+                for a in answers
+            ])
+
     stage2_text = "\n\n".join([
         f"Model: {result['model']}\nRanking: {result['ranking']}"
         for result in stage2_results
@@ -337,18 +359,20 @@ async def stage3_synthesize_final(
     # Get the current user query (last message)
     user_query = messages[-1]['content']
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, engaged in cross-interrogation, and then ranked each other's responses.
 
 Original Question: {user_query}
 
 STAGE 1 - Individual Responses:
 {stage1_text}
+{stage1_5_text}
 
 STAGE 2 - Peer Rankings:
 {stage2_text}
 
 Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
 - The individual responses and their insights
+- The cross-interrogation questions and answers that reveal deeper understanding
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
 
