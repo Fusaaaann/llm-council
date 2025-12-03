@@ -4,20 +4,18 @@ from typing import List, Dict, Any, Tuple
 from .openrouter import query_models_parallel, query_model
 
 
-async def stage1_collect_responses(user_query: str, council_models: List[str]) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(messages: List[Dict[str, str]], council_models: List[str]) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
     Args:
-        user_query: The user's question
+        messages: Conversation history as list of message dicts with 'role' and 'content'
         council_models: List of model identifiers to query
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
-
-    # Query all models in parallel
+    # Query all models in parallel with full conversation history
     responses = await query_models_parallel(council_models, messages)
 
     # Format results
@@ -33,7 +31,7 @@ async def stage1_collect_responses(user_query: str, council_models: List[str]) -
 
 
 async def stage1_5_cross_interrogation(
-    user_query: str,
+    messages: List[Dict[str, str]],
     stage1_results: List[Dict[str, Any]],
     council_models: List[str]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
@@ -41,7 +39,7 @@ async def stage1_5_cross_interrogation(
     Stage 1.5 Part 1: Each model generates follow-up questions about other responses.
 
     Args:
-        user_query: The original user query
+        messages: Conversation history as list of message dicts with 'role' and 'content'
         stage1_results: Results from Stage 1
         council_models: List of model identifiers to query
 
@@ -62,6 +60,9 @@ async def stage1_5_cross_interrogation(
         f"Response {label}:\n{result['response']}"
         for label, result in zip(labels, stage1_results)
     ])
+
+    # Get the current user query (last message)
+    user_query = messages[-1]['content']
 
     interrogation_prompt = f"""You are reviewing responses to the following question:
 
@@ -88,10 +89,11 @@ QUESTIONS FOR Response [Y]:
 
 Be concise and specific. Each question should be a single sentence."""
 
-    messages = [{"role": "user", "content": interrogation_prompt}]
+    # Build messages for interrogation (conversation history + interrogation prompt)
+    interrogation_messages = messages[:-1] + [{"role": "user", "content": interrogation_prompt}]
 
     # Get questions from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    responses = await query_models_parallel(council_models, interrogation_messages)
 
     # Format results
     questions_results = []
@@ -106,7 +108,7 @@ Be concise and specific. Each question should be a single sentence."""
 
 
 async def stage1_5_collect_answers(
-    user_query: str,
+    messages: List[Dict[str, str]],
     stage1_results: List[Dict[str, Any]],
     questions_results: List[Dict[str, Any]],
     label_to_model: Dict[str, str]
@@ -115,7 +117,7 @@ async def stage1_5_collect_answers(
     Stage 1.5 Part 2: Each model answers questions directed at them.
 
     Args:
-        user_query: The original user query
+        messages: Conversation history as list of message dicts with 'role' and 'content'
         stage1_results: Results from Stage 1
         questions_results: Questions from interrogation phase
         label_to_model: Mapping from labels to model names
@@ -173,6 +175,9 @@ async def stage1_5_collect_answers(
             for i, q in enumerate(questions)
         ])
 
+        # Get the current user query (last message)
+        user_query = messages[-1]['content']
+
         answer_prompt = f"""Original Question: {user_query}
 
 Your Original Response:
@@ -192,8 +197,9 @@ ANSWER TO QUESTION 2:
 
 Keep each answer brief (1-3 sentences)."""
 
-        messages = [{"role": "user", "content": answer_prompt}]
-        response = await query_model(model, messages)
+        # Build messages for answering (conversation history + answer prompt)
+        answer_messages = messages[:-1] + [{"role": "user", "content": answer_prompt}]
+        response = await query_model(model, answer_messages)
 
         if response is None:
             answers_results.append({
@@ -214,7 +220,7 @@ Keep each answer brief (1-3 sentences)."""
 
 
 async def stage2_collect_rankings(
-    user_query: str,
+    messages: List[Dict[str, str]],
     stage1_results: List[Dict[str, Any]],
     council_models: List[str]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
@@ -222,7 +228,7 @@ async def stage2_collect_rankings(
     Stage 2: Each model ranks the anonymized responses.
 
     Args:
-        user_query: The original user query
+        messages: Conversation history as list of message dicts with 'role' and 'content'
         stage1_results: Results from Stage 1
         council_models: List of model identifiers to query
 
@@ -243,6 +249,9 @@ async def stage2_collect_rankings(
         f"Response {label}:\n{result['response']}"
         for label, result in zip(labels, stage1_results)
     ])
+
+    # Get the current user query (last message)
+    user_query = messages[-1]['content']
 
     ranking_prompt = f"""You are evaluating different responses to the following question:
 
@@ -275,10 +284,11 @@ FINAL RANKING:
 
 Now provide your evaluation and ranking:"""
 
-    messages = [{"role": "user", "content": ranking_prompt}]
+    # Build messages for ranking (conversation history + ranking prompt)
+    ranking_messages = messages[:-1] + [{"role": "user", "content": ranking_prompt}]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    responses = await query_models_parallel(council_models, ranking_messages)
 
     # Format results
     stage2_results = []
@@ -296,7 +306,7 @@ Now provide your evaluation and ranking:"""
 
 
 async def stage3_synthesize_final(
-    user_query: str,
+    messages: List[Dict[str, str]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     chairman_model: str
@@ -305,7 +315,7 @@ async def stage3_synthesize_final(
     Stage 3: Chairman synthesizes final response.
 
     Args:
-        user_query: The original user query
+        messages: Conversation history as list of message dicts with 'role' and 'content'
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
         chairman_model: Model identifier for chairman
@@ -324,6 +334,9 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
+    # Get the current user query (last message)
+    user_query = messages[-1]['content']
+
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
 Original Question: {user_query}
@@ -341,10 +354,11 @@ Your task as Chairman is to synthesize all of this information into a single, co
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
-    messages = [{"role": "user", "content": chairman_prompt}]
+    # Build messages for chairman (conversation history + chairman prompt)
+    chairman_messages = messages[:-1] + [{"role": "user", "content": chairman_prompt}]
 
     # Query the chairman model
-    response = await query_model(chairman_model, messages)
+    response = await query_model(chairman_model, chairman_messages)
 
     if response is None:
         # Fallback if chairman fails
