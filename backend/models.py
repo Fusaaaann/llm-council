@@ -9,6 +9,7 @@ class CreateConversationRequest(BaseModel):
     uses_byok: bool = False
     council_models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
+    workflow_json: Optional[str] = None  # Workflow DSL JSON (overrides council config if provided)
 
 
 class SendMessageRequest(BaseModel):
@@ -28,8 +29,9 @@ class RenameConversationRequest(BaseModel):
 
 class ModelConfigRequest(BaseModel):
     """Request to update model configuration."""
-    council_models: List[str]
-    chairman_model: str
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
+    workflow_json: Optional[str] = None  # Workflow DSL JSON (overrides council config if provided)
 
 
 class CreateProfileRequest(BaseModel):
@@ -94,3 +96,4 @@ class Conversation(BaseModel):
     uses_byok: bool = False
     council_models: Optional[List[str]] = None
     chairman_model: Optional[str] = None
+    workflow_json: Optional[str] = None  # Workflow DSL JSON definition

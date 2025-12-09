@@ -1,9 +1,9 @@
 """E2E tests for conversation encryption."""
 
-import pytest
 import json
-from pathlib import Path
-from backend import storage
+from backend.storage import database
+import backend.storage.conversations
+from backend import config
 
 
 def test_create_and_verify_encrypted_conversation(client, auth_user):
@@ -21,8 +21,8 @@ def test_create_and_verify_encrypted_conversation(client, auth_user):
     conv_id = conv["id"]
 
     # Add a message via storage (simpler than SSE in test)
-    storage.add_user_message(conv_id, "Secret message", profile_id)
-    storage.add_assistant_message(
+    backend.storage.conversations.add_user_message(conv_id, "Secret message", profile_id)
+    backend.storage.conversations.add_assistant_message(
         conv_id,
         stage1=[{"model": "test", "response": "Secret response"}],
         stage2=[],
@@ -31,15 +31,16 @@ def test_create_and_verify_encrypted_conversation(client, auth_user):
         profile_id=profile_id
     )
 
-    # Check file on disk
-    conv_path = storage.get_conversation_path(conv_id, profile_id)
-    assert conv_path.exists()
-
-    with open(conv_path, 'r') as f:
-        disk_data = json.load(f)
+    # Check data in database
+    with database.get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data FROM conversations WHERE id = ? AND profile_id = ?", (conv_id, profile_id))
+        row = cursor.fetchone()
+        assert row is not None
+        disk_data = json.loads(row['data'])
 
     # Verify structure based on encryption setting
-    if storage.ENCRYPTION_ENABLED:
+    if config.ENCRYPTION_ENABLED:
         # Should be encrypted
         assert "_encryption" in disk_data
         assert "messages_encrypted" in disk_data
@@ -79,7 +80,7 @@ def test_encryption_status_endpoint(client, auth_user, test_conversation_with_me
     assert "encrypted" in data
     assert "message_count" in data
 
-    if storage.ENCRYPTION_ENABLED:
+    if config.ENCRYPTION_ENABLED:
         assert data["encrypted"] is True
         assert "provider" in data
         assert "version" in data
@@ -103,12 +104,14 @@ def test_encrypt_conversation(client, auth_user, test_conversation_with_message)
 
     if response.status_code == 200:
         data = response.json()
-        assert data["encrypted"] is True
+        assert data["status"]["encrypted"] is True
 
-        # Verify on disk
-        conv_path = storage.get_conversation_path(conv_id, profile_id)
-        with open(conv_path, 'r') as f:
-            disk_data = json.load(f)
+        # Verify in database
+        with database.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM conversations WHERE id = ? AND profile_id = ?", (conv_id, profile_id))
+            row = cursor.fetchone()
+            disk_data = json.loads(row['data'])
 
         assert "_encryption" in disk_data
         assert "messages_encrypted" in disk_data
@@ -138,12 +141,14 @@ def test_decrypt_conversation(client, auth_user, test_conversation_with_message)
 
     if response.status_code == 200:
         data = response.json()
-        assert data["encrypted"] is False
+        assert data["status"]["encrypted"] is False
 
-        # Verify on disk
-        conv_path = storage.get_conversation_path(conv_id, profile_id)
-        with open(conv_path, 'r') as f:
-            disk_data = json.load(f)
+        # Verify in database
+        with database.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT data FROM conversations WHERE id = ? AND profile_id = ?", (conv_id, profile_id))
+            row = cursor.fetchone()
+            disk_data = json.loads(row['data'])
 
         assert "messages" in disk_data  # Plaintext messages
         assert "_encryption" not in disk_data

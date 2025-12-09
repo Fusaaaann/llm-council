@@ -17,12 +17,8 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from backend.storage import (
-    create_conversation,
-    get_conversation,
-    add_user_message,
-    add_assistant_message,
-    save_conversation,
+from backend.storage.conversations import add_assistant_message, add_user_message, create_conversation, get_conversation, save_conversation
+from backend.storage2 import (
     get_conversation_path
 )
 from backend.config import ENCRYPTION_ENABLED

@@ -4,9 +4,11 @@
  * Generates event handlers based on stage configuration.
  * This eliminates the need for massive switch statements and makes
  * the system easily extensible.
+ *
+ * Supports both council execution (stage-based) and workflow execution (superstep-based).
  */
 
-import { getStageForEvent, isSpecialEvent, getStageConfig } from './stageConfig';
+import { getStageForEvent, isSpecialEvent, getStageConfig, isWorkflowEvent, parseWorkflowEvent } from './stageConfig';
 
 /**
  * Create a dynamic event handler for streaming events
@@ -80,6 +82,104 @@ export function createStreamEventHandler(callbacks) {
   }
 
   /**
+   * Handle workflow events
+   */
+  function handleWorkflowEvent(eventType, event, conversationId) {
+    const parsed = parseWorkflowEvent(eventType);
+
+    if (!parsed) {
+      // Must be stream_init or complete
+      if (eventType === 'stream_init') {
+        updateQueryState(conversationId, 'workflow', 'loading');
+        return true;
+      }
+      if (eventType === 'complete') {
+        // Workflow complete - save variables to message
+        if (event.final_variables) {
+          setConversation((prev) => {
+            const messages = [...prev.messages];
+            const lastMsg = messages[messages.length - 1];
+
+            if (lastMsg && lastMsg.role === 'assistant') {
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                variables: event.final_variables,
+                partial: false
+              };
+            }
+
+            return { ...prev, messages };
+          });
+        }
+        updateQueryState(conversationId, 'workflow', 'complete');
+        return true;
+      }
+      return false;
+    }
+
+    // Handle superstep events
+    const { type, stepId } = parsed;
+
+    if (type === 'SUPERSTEP_MAP_COMPLETE') {
+      // Save worker outputs for this step
+      if (event.worker_outputs) {
+        setConversation((prev) => {
+          const messages = [...prev.messages];
+          const lastMsg = messages[messages.length - 1];
+
+          if (lastMsg && lastMsg.role === 'assistant') {
+            const currentWorkerOutputs = lastMsg.worker_outputs || {};
+            messages[messages.length - 1] = {
+              ...lastMsg,
+              worker_outputs: {
+                ...currentWorkerOutputs,
+                [stepId]: event.worker_outputs
+              }
+            };
+          }
+
+          return { ...prev, messages };
+        });
+      }
+    }
+
+    if (type === 'SUPERSTEP_REDUCE_COMPLETE') {
+      // Save intermediate variable state
+      setConversation((prev) => {
+        const messages = [...prev.messages];
+        const lastMsg = messages[messages.length - 1];
+
+        if (lastMsg && lastMsg.role === 'assistant') {
+          // Update or create variables field
+          const currentVars = lastMsg.variables || {};
+          const outputVar = event.output_variable;
+          const result = event.result;
+
+          messages[messages.length - 1] = {
+            ...lastMsg,
+            variables: {
+              ...currentVars,
+              [outputVar]: result
+            },
+            partial: true // Still in progress
+          };
+        }
+
+        return { ...prev, messages };
+      });
+    }
+
+    // Update loading state for map/reduce phases
+    if (type === 'SUPERSTEP_MAP_START' || type === 'SUPERSTEP_REDUCE_START') {
+      updateQueryState(conversationId, `workflow_step_${stepId}`, 'loading');
+    } else if (type === 'SUPERSTEP_REDUCE_COMPLETE') {
+      updateQueryState(conversationId, `workflow_step_${stepId}`, 'complete');
+    }
+
+    return true;
+  }
+
+  /**
    * Main event handler function
    */
   return function handleEvent(eventType, event, conversationId) {
@@ -90,7 +190,12 @@ export function createStreamEventHandler(callbacks) {
       return false;
     }
 
-    // Find which stage this event belongs to
+    // Check if this is a workflow event
+    if (isWorkflowEvent(eventType)) {
+      return handleWorkflowEvent(eventType, event, conversationId);
+    }
+
+    // Find which stage this event belongs to (council execution)
     const stageInfo = getStageForEvent(eventType);
     if (!stageInfo) {
       console.warn('[EventHandler] Unknown event type:', eventType);
@@ -124,22 +229,40 @@ export function createStreamEventHandler(callbacks) {
 /**
  * Helper: Create or ensure assistant message exists
  * Used when resuming streams or handling retry scenarios
+ *
+ * @param {Function} setConversation - Conversation setter function
+ * @param {string} executionMode - 'council' or 'workflow' (optional, auto-detected if not provided)
  */
-export function ensureAssistantMessage(setConversation) {
+export function ensureAssistantMessage(setConversation, executionMode = null) {
   setConversation((prev) => {
     const messages = [...prev.messages];
     const lastMsg = messages[messages.length - 1];
 
     // If last message is not assistant, create one
     if (!lastMsg || lastMsg.role !== 'assistant') {
-      messages.push({
-        role: 'assistant',
-        stage1: null,
-        stage1_5: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-      });
+      // Auto-detect execution mode from conversation if not specified
+      const isWorkflow = executionMode === 'workflow' || prev.workflow_json;
+
+      if (isWorkflow) {
+        // Workflow execution message
+        messages.push({
+          role: 'assistant',
+          variables: {},
+          worker_outputs: {},
+          metadata: null,
+          partial: true
+        });
+      } else {
+        // Council execution message (default)
+        messages.push({
+          role: 'assistant',
+          stage1: null,
+          stage1_5: null,
+          stage2: null,
+          stage3: null,
+          metadata: null,
+        });
+      }
     }
 
     return { ...prev, messages };

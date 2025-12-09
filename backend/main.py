@@ -13,7 +13,7 @@ from .security_middleware import SecurityHeadersMiddleware
 from .rate_limiter import limiter
 
 # Import route modules
-from .routes import conversations, auth, profiles, forum, model_config
+from .routes import conversations, auth, profiles, forum, model_config, workflows
 
 
 @asynccontextmanager
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Revoke all sessions for security
     from .auth import revoke_all_sessions
-    from .audit import log_session_revocation
+    from .storage.audit import log_session_revocation
     revoke_all_sessions()
     log_session_revocation("server_shutdown")
     print("All sessions revoked on shutdown", file=sys.stderr)
@@ -60,6 +60,7 @@ app.include_router(auth.router)
 app.include_router(profiles.router)
 app.include_router(forum.router)
 app.include_router(model_config.router)
+app.include_router(workflows.router)
 
 
 @app.get("/")

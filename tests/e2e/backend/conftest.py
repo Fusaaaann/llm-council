@@ -7,16 +7,13 @@ import shutil
 from pathlib import Path
 from fastapi.testclient import TestClient
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
 # Set test environment before importing backend modules
 os.environ["ENVIRONMENT"] = "local"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-e2e-testing-only"
 os.environ["ENCRYPTION_ENABLED"] = "false"  # Simplify tests
 
 from backend.main import app
-from backend import storage, auth
+from backend.storage import database, conversations
 from tests.mocks.openrouter_mock import mock_query_model, mock_query_models_parallel
 
 # Monkey patch OpenRouter functions
@@ -32,13 +29,7 @@ def test_data_dir():
     test_dir.mkdir(exist_ok=True)
 
     # Override storage paths
-    storage.DATA_DIR = test_dir
-    storage.CONVERSATIONS_DIR = test_dir / "conversations"
-    storage.PROFILES_FILE = test_dir / "profiles.json"
-    storage.USERS_FILE = test_dir / "users.json"
-    storage.SESSIONS_FILE = test_dir / "sessions.json"
-    storage.WAITLIST_FILE = test_dir / "waitlist.json"
-    storage.INVITES_FILE = test_dir / "invites.json"
+    database.DATA_DIR = test_dir
 
     yield test_dir
 
@@ -55,10 +46,8 @@ def client(test_data_dir):
         shutil.rmtree(test_data_dir / "conversations")
     (test_data_dir / "conversations").mkdir(exist_ok=True)
 
-    # Clean user/session files
-    for file in [storage.USERS_FILE, storage.SESSIONS_FILE, storage.PROFILES_FILE]:
-        if file.exists():
-            file.unlink()
+    # Reinitialize database for clean state
+    database.init_database()
 
     with TestClient(app) as client:
         yield client
@@ -112,10 +101,10 @@ def test_conversation_with_message(client, auth_user, test_conversation):
     profile_id = auth_user["user"]["default_profile_id"]
 
     # Add user message
-    storage.add_user_message(conv_id, "Test question for the council?", profile_id)
+    conversations.add_user_message(conv_id, "Test question for the council?", profile_id)
 
     # Add mock assistant response
-    storage.add_assistant_message(
+    conversations.add_assistant_message(
         conv_id,
         stage1=[
             {"model": "model-a", "response": "Response from Model A"},
@@ -148,5 +137,5 @@ def test_conversation_with_message(client, auth_user, test_conversation):
     )
 
     # Reload conversation
-    conv = storage.get_conversation(conv_id, profile_id)
+    conv = conversations.get_conversation(conv_id, profile_id)
     return conv

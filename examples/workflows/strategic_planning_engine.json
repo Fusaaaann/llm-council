@@ -1,0 +1,52 @@
+{
+  "flow_id": "strategic_planning_engine",
+  "global_timeout_ms": 300000,
+  "variables": [
+    {
+      "name": "strategic_plan",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "develop_strategy",
+      "description": "Strategic Planning & Recommendations",
+      "map_phase": {
+        "concurrency_limit": 4,
+        "global_instruction_overlay": "Workflow Purpose: Strategic Planning & Recommendations\n\nContext: Executive decision-makers needing actionable strategic insights\n\nPriorities: actionable, forward-thinking, data-informed\n\nConstraints: Must be implementable within 6-12 months, consider competitive landscape and resource constraints",
+        "workers": [
+          {
+            "worker_id": "market_strategist",
+            "model_ref": "openai/gpt-4-turbo",
+            "instruction": "Analyze market trends, competitive positioning, and customer needs. Identify growth opportunities and market threats."
+          },
+          {
+            "worker_id": "operational_planner",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Evaluate operational feasibility, resource requirements, and implementation logistics. Consider team capabilities and organizational readiness."
+          },
+          {
+            "worker_id": "financial_strategist",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Assess financial viability, budget implications, revenue projections, and ROI expectations. Identify funding requirements and financial risks."
+          },
+          {
+            "worker_id": "innovation_advisor",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Explore innovative approaches, emerging technologies, and disruptive opportunities. Challenge conventional thinking and propose creative solutions."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "openai/gpt-4-turbo",
+        "output_write_to": "strategic_plan",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        },
+        "chairman_instructions": "Synthesize insights into a comprehensive strategic plan with:\n\n1. Strategic Recommendation (1-2 paragraphs)\n2. Key Objectives (3-5 measurable goals)\n3. Implementation Phases (quarterly milestones)\n4. Resource Requirements (team, budget, tools)\n5. Success Metrics (KPIs to track)\n6. Risk Mitigation Strategies\n7. Alternative Scenarios (Plan B)\n\nProvide executive-level clarity with tactical depth."
+      }
+    }
+  ]
+}

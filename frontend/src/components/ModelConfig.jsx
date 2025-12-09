@@ -8,6 +8,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
   const [chairmanModel, setChairmanModel] = useState('');
   const [newModel, setNewModel] = useState('');
   const [showEncryption, setShowEncryption] = useState(false); // Hidden by default
+  const [workflowInput, setWorkflowInput] = useState(''); // Workflow JSON input
 
   // Model config is read-only for existing conversations (models set at creation)
   const isReadOnly = currentConversation && currentConversation.messages && currentConversation.messages.length > 0;
@@ -26,11 +27,13 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
         // Even for new conversations, backend provides defaults if not specified
         setCouncilModels(currentConversation.council_models || []);
         setChairmanModel(currentConversation.chairman_model || '');
+        setWorkflowInput(currentConversation.workflow_json || '');
       } else {
         // No conversation selected - load global defaults
         const data = await api.getModels();
         setCouncilModels(data.council_models);
         setChairmanModel(data.chairman_model);
+        setWorkflowInput('');
       }
     } catch (error) {
       console.error('Failed to load model config:', error);
@@ -49,19 +52,38 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
   };
 
   const handleSave = async () => {
-    if (councilModels.length === 0) {
-      alert('Please add at least one council model');
+    // Validation: either workflow OR council config, not both
+    const hasWorkflow = workflowInput.trim() !== '';
+    const hasCouncilConfig = councilModels.length > 0 || chairmanModel.trim() !== '';
+
+    if (!hasWorkflow && !hasCouncilConfig) {
+      alert('Please provide either a workflow JSON or council configuration');
       return;
     }
-    if (!chairmanModel.trim()) {
-      alert('Please select a chairman model');
-      return;
+
+    if (!hasWorkflow) {
+      // Validate council config
+      if (councilModels.length === 0) {
+        alert('Please add at least one council model');
+        return;
+      }
+      if (!chairmanModel.trim()) {
+        alert('Please select a chairman model');
+        return;
+      }
     }
 
     try {
       // For new conversations (no messages), call onSave to update pending config
       if (!isReadOnly) {
-        await onSave(councilModels, chairmanModel);
+        // Send null for the config mode not being used
+        if (hasWorkflow) {
+          // Workflow mode: send null for council config
+          await onSave(null, null, workflowInput);
+        } else {
+          // Council mode: send null for workflow
+          await onSave(councilModels, chairmanModel, null);
+        }
       }
       onClose();
     } catch (error) {
@@ -112,8 +134,9 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
                     if (e.key === 'Enter') handleAddModel();
                   }}
                   className="model-input"
+                  disabled={workflowInput.trim() !== ''}
                 />
-                <button onClick={handleAddModel} className="add-button">
+                <button onClick={handleAddModel} className="add-button" disabled={workflowInput.trim() !== ''}>
                   + Add
                 </button>
               </div>
@@ -129,6 +152,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
                       <button
                         onClick={() => handleRemoveModel(model)}
                         className="remove-button"
+                        disabled={workflowInput.trim() !== ''}
                       >
                         ✕
                       </button>
@@ -150,6 +174,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
                   value={chairmanModel}
                   onChange={(e) => setChairmanModel(e.target.value)}
                   className="chairman-select"
+                  disabled={workflowInput.trim() !== ''}
                 >
                   <option value="">Select a model...</option>
                   {councilModels.map((model) => (
@@ -165,6 +190,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
                   value={chairmanModel}
                   onChange={(e) => setChairmanModel(e.target.value)}
                   className="model-input"
+                  disabled={workflowInput.trim() !== ''}
                 />
               </>
             ) : (
@@ -172,6 +198,63 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
                 {chairmanModel || 'No chairman model set'}
               </div>
             )}
+          </div>
+
+          <div className="config-section">
+            <details style={{ cursor: 'pointer' }}>
+              <summary style={{ fontWeight: 'bold', fontSize: '1.1em', marginBottom: '8px' }}>
+                Workflow JSON (Advanced)
+              </summary>
+              <p className="help-text">
+                Use a custom workflow DSL instead of council configuration.
+                <a
+                  href="/workflow-generator"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ marginLeft: '4px', color: '#007bff' }}
+                >
+                  Open Workflow Generator →
+                </a>
+              </p>
+              {!isReadOnly ? (
+                <>
+                  <textarea
+                    value={workflowInput}
+                    onChange={(e) => setWorkflowInput(e.target.value)}
+                    placeholder='Paste workflow JSON here...'
+                    rows={10}
+                    style={{
+                      width: '100%',
+                      fontFamily: 'monospace',
+                      fontSize: '12px',
+                      padding: '8px',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px'
+                    }}
+                  />
+                  {workflowInput.trim() !== '' && (
+                    <button
+                      onClick={() => setWorkflowInput('')}
+                      style={{
+                        marginTop: '8px',
+                        padding: '6px 12px',
+                        background: '#dc3545',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Clear Workflow (Restore Council Config)
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px', fontFamily: 'monospace', fontSize: '12px', maxHeight: '200px', overflow: 'auto' }}>
+                  {workflowInput || 'No workflow configured'}
+                </div>
+              )}
+            </details>
           </div>
 
           {/* Hidden encryption controls - set showEncryption to true to enable */}

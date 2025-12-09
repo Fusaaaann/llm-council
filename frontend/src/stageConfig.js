@@ -95,6 +95,55 @@ export const SPECIAL_EVENTS = {
   TITLE_COMPLETE: 'title_complete'
 };
 
+// Workflow event patterns and configuration
+export const WORKFLOW_EVENTS = {
+  STREAM_INIT: 'stream_init',
+  SUPERSTEP_MAP_START: /^superstep_(\w+)_map_start$/,
+  SUPERSTEP_MAP_COMPLETE: /^superstep_(\w+)_map_complete$/,
+  SUPERSTEP_MIDDLEWARE_COMPLETE: /^superstep_(\w+)_middleware_complete$/,
+  SUPERSTEP_REDUCE_START: /^superstep_(\w+)_reduce_start$/,
+  SUPERSTEP_REDUCE_COMPLETE: /^superstep_(\w+)_reduce_complete$/,
+  COMPLETE: 'complete'
+};
+
+/**
+ * Check if event type is a workflow event
+ */
+export function isWorkflowEvent(eventType) {
+  // Check exact matches
+  if (eventType === WORKFLOW_EVENTS.STREAM_INIT || eventType === WORKFLOW_EVENTS.COMPLETE) {
+    return true;
+  }
+
+  // Check pattern matches
+  return Object.values(WORKFLOW_EVENTS).some(pattern => {
+    if (pattern instanceof RegExp) {
+      return pattern.test(eventType);
+    }
+    return false;
+  });
+}
+
+/**
+ * Parse workflow event to extract step_id and phase
+ */
+export function parseWorkflowEvent(eventType) {
+  for (const [key, pattern] of Object.entries(WORKFLOW_EVENTS)) {
+    if (pattern instanceof RegExp) {
+      const match = eventType.match(pattern);
+      if (match) {
+        return {
+          type: key,
+          stepId: match[1],
+          eventType
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Get stage configuration by name
  */

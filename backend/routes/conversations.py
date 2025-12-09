@@ -9,7 +9,11 @@ import asyncio
 import time
 from urllib.parse import quote
 
-from .. import config, storage, auth
+import backend.storage.conversations
+import backend.storage.encryption
+import backend.storage.publish
+
+from .. import config, auth
 from ..stage_config import STAGES, SPECIAL_EVENTS, get_stage_config
 from ..council import (
     stage1_collect_responses,
@@ -95,11 +99,11 @@ async def list_conversations(
     """
     # For public view, no profile access check needed - return all public conversations
     if view == "public":
-        return storage.list_conversations(view="public")
+        return backend.storage.conversations.list_conversations(view="public")
 
     # For private/all views, validate profile access
     pid = get_profile_id_for_request(user, profile_id)
-    return storage.list_conversations(pid, view)
+    return backend.storage.conversations.list_conversations(pid, view)
 
 
 @router.get("/stream")
@@ -153,7 +157,7 @@ async def stream_conversations(
     async def event_generator():
         try:
             # Send initial conversation list
-            conversations = storage.list_conversations(pid, view) if view != "public" else storage.list_conversations(view="public")
+            conversations = backend.storage.conversations.list_conversations(pid, view) if view != "public" else backend.storage.conversations.list_conversations(view="public")
             yield f"data: {json.dumps({'type': 'initial', 'data': conversations})}\n\n"
 
             # Track last known state (conversation ID -> modified time)
@@ -176,7 +180,7 @@ async def stream_conversations(
                     last_heartbeat = now
 
                 # Fetch current conversation list
-                current_conversations = storage.list_conversations(pid, view) if view != "public" else storage.list_conversations(view="public")
+                current_conversations = backend.storage.conversations.list_conversations(pid, view) if view != "public" else backend.storage.conversations.list_conversations(view="public")
                 current_state = {
                     conv['id']: conv.get('modified_at', conv.get('created_at'))
                     for conv in current_conversations
@@ -230,12 +234,13 @@ async def create_conversation(
     """Create a new conversation."""
     pid = get_profile_id_for_request(user, profile_id)
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(
+    conversation = backend.storage.conversations.create_conversation(
         conversation_id,
         pid,
         req.uses_byok,
         req.council_models,
-        req.chairman_model
+        req.chairman_model,
+        req.workflow_json
     )
     return conversation
 
@@ -248,7 +253,7 @@ async def get_conversation(
 ):
     """Get a specific conversation with all its messages."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
@@ -263,11 +268,11 @@ async def rename_conversation(
 ):
     """Rename a conversation."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    storage.update_conversation_title(conversation_id, req.title, pid)
+    backend.storage.conversations.update_conversation_title(conversation_id, req.title, pid)
     return {"success": True}
 
 
@@ -280,7 +285,7 @@ async def update_conversation_models(
 ):
     """Update conversation models (only allowed before first message)."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -298,9 +303,29 @@ async def update_conversation_models(
             detail="Cannot update models after messages have been sent"
         )
 
-    # Update the conversation models
-    storage.update_conversation_models(
-        conversation_id, req.council_models, req.chairman_model, pid
+    # Validate: either workflow OR council config, not both
+    has_workflow = req.workflow_json and req.workflow_json.strip()
+    has_council = req.council_models or req.chairman_model
+
+    if has_workflow and has_council:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot specify both workflow_json and council configuration. Use one or the other."
+        )
+
+    if not has_workflow and not has_council:
+        raise HTTPException(
+            status_code=400,
+            detail="Must specify either workflow_json or council configuration (council_models + chairman_model)"
+        )
+
+    # Update the conversation models/workflow
+    backend.storage.conversations.update_conversation_models(
+        conversation_id,
+        council_models=req.council_models,
+        chairman_model=req.chairman_model,
+        workflow_json=req.workflow_json,
+        profile_id=pid
     )
     return {"success": True}
 
@@ -313,7 +338,7 @@ async def delete_conversation(
 ):
     """Delete a conversation."""
     pid = get_profile_id_for_request(user, profile_id)
-    success = storage.delete_conversation(conversation_id, pid)
+    success = backend.storage.conversations.delete_conversation(conversation_id, pid)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"success": True}
@@ -327,7 +352,7 @@ async def export_markdown(
 ):
     """Export conversation as markdown."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -348,7 +373,7 @@ async def export_html(
 ):
     """Export conversation as HTML."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -369,7 +394,7 @@ async def export_json(
 ):
     """Export conversation as JSON."""
     pid = get_profile_id_for_request(user, profile_id)
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -398,7 +423,7 @@ async def send_message(
     pid = get_profile_id_for_request(user, profile_id)
 
     # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -414,10 +439,10 @@ async def send_message(
 
     try:
         # Set loading state
-        storage.set_conversation_loading(conversation_id, True, pid)
+        backend.storage.conversations.set_conversation_loading(conversation_id, True, pid)
 
         # Add user message
-        storage.add_user_message(conversation_id, req.content, pid)
+        backend.storage.conversations.add_user_message(conversation_id, req.content, pid)
 
         # Get model configuration from conversation
         council_models = conversation.get("council_models")
@@ -466,7 +491,7 @@ async def send_message(
         # Wait for title if it was started
         if title_task:
             title = await title_task
-            storage.update_conversation_title(conversation_id, title, pid)
+            backend.storage.conversations.update_conversation_title(conversation_id, title, pid)
 
         # Build metadata
         metadata = {
@@ -475,7 +500,7 @@ async def send_message(
         }
 
         # Add assistant message with all stages and metadata
-        storage.add_assistant_message(
+        backend.storage.conversations.add_assistant_message(
             conversation_id,
             stage1_results,
             stage2_results,
@@ -486,7 +511,7 @@ async def send_message(
         )
 
         # Clear loading state
-        storage.set_conversation_loading(conversation_id, False, pid)
+        backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
         # Return the complete response with metadata
         return {
@@ -498,7 +523,7 @@ async def send_message(
         }
     except Exception as e:
         # Clear loading state on error
-        storage.set_conversation_loading(conversation_id, False, pid)
+        backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
         raise
 
 
@@ -519,7 +544,7 @@ async def send_message_stream(
     pid = get_profile_id_for_request(user, profile_id)
 
     # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -600,7 +625,7 @@ async def send_message_stream(
                 return None  # No heartbeat needed
 
             # Set loading state to true
-            storage.set_conversation_loading(conversation_id, True, pid)
+            backend.storage.conversations.set_conversation_loading(conversation_id, True, pid)
 
             try:
                 # Add user message (with idempotency check to prevent duplicates on retry)
@@ -621,7 +646,7 @@ async def send_message_stream(
                         is_retry = True
 
                 if not is_duplicate:
-                    storage.add_user_message(conversation_id, req.content, pid)
+                    backend.storage.conversations.add_user_message(conversation_id, req.content, pid)
                 else:
                     print(f"[INFO] Skipping duplicate user message for conversation {conversation_id}")
                     if is_retry:
@@ -629,138 +654,169 @@ async def send_message_stream(
                         print(f"[INFO] Retry detected, removing previous assistant response")
                         # Need to temporarily remove user message, remove assistant, then restore user
                         conversation["messages"].pop()  # Remove user
-                        storage.remove_last_assistant_message(conversation_id, pid)
-                        storage.add_user_message(conversation_id, req.content, pid)
+                        backend.storage.conversations.remove_last_assistant_message(conversation_id, pid)
+                        backend.storage.conversations.add_user_message(conversation_id, req.content, pid)
 
-                # Get model configuration from conversation
-                council_models = conversation.get("council_models")
-                chairman_model = conversation.get("chairman_model")
+                # Check if conversation uses workflow or council execution
+                workflow_json = conversation.get("workflow_json")
 
-                # Fallback to global config if not set (backward compatibility)
-                if not council_models:
-                    from ..config import COUNCIL_MODELS
-                    council_models = COUNCIL_MODELS
-                if not chairman_model:
-                    from ..config import CHAIRMAN_MODEL
-                    chairman_model = CHAIRMAN_MODEL
+                if workflow_json:
+                    # ========== WORKFLOW EXECUTION PATH ==========
+                    from ..workflow_engine import execute_workflow_stream
 
-                # Start title generation in parallel (don't await yet)
-                title_task = None
-                if is_first_message:
-                    title_task = asyncio.create_task(generate_conversation_title(req.content))
+                    # Start title generation in parallel (don't await yet)
+                    title_task = None
+                    if is_first_message:
+                        title_task = asyncio.create_task(generate_conversation_title(req.content))
 
-                # Build message history including the new user message
-                message_history = build_message_history(conversation)
-                message_history.append({"role": "user", "content": req.content})
-
-                # NOTE: Event names are now defined in stage_config.py for consistency
-                # with frontend. You can use: get_stage_config("stage1").event_start
-                # instead of hardcoded strings for better maintainability.
-
-                # Stage 1: Collect responses
-                yield send_event('stage1_start', stage='stage1')
-                stage1_results = await stage1_collect_responses(message_history, council_models)
-                yield send_event('stage1_complete', stage1_results, 'stage1')
-                # Save partial state after stage1 with stream metadata
-                storage.save_partial_assistant_message(
-                    conversation_id, "stage1", stage1_results,
-                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
-                )
-
-                # Check heartbeat and send if needed
-                heartbeat_event = check_and_send_heartbeat()
-                if heartbeat_event:
-                    yield heartbeat_event
-                    if 'auth_expired' in heartbeat_event:
-                        return  # Stop stream if auth expired
-
-                # Stage 1.5: Cross-interrogation (questions)
-                yield send_event('stage1_5_questions_start', stage='stage1_5')
-                questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(message_history, stage1_results, council_models)
-                yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
-
-                # Stage 1.5: Collect answers
-                yield send_event('stage1_5_answers_start', stage='stage1_5')
-                answers_results = await stage1_5_collect_answers(message_history, stage1_results, questions_results, label_to_model_interrogation)
-                yield send_event('stage1_5_answers_complete', {
-                    'data': answers_results,
-                    'label_to_model': label_to_model_interrogation
-                }, 'stage1_5')
-                # Save partial state after stage1_5 with stream metadata
-                stage1_5_data = {
-                    'questions': questions_results,
-                    'answers': answers_results,
-                    'label_to_model': label_to_model_interrogation
-                }
-                storage.save_partial_assistant_message(
-                    conversation_id, "stage1_5", stage1_5_data,
-                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
-                )
-
-                # Check heartbeat and send if needed
-                heartbeat_event = check_and_send_heartbeat()
-                if heartbeat_event:
-                    yield heartbeat_event
-                    if 'auth_expired' in heartbeat_event:
+                    # Parse workflow JSON
+                    try:
+                        workflow_def = json.loads(workflow_json)
+                    except json.JSONDecodeError as e:
+                        yield send_event('error', {'message': f'Invalid workflow JSON: {str(e)}'}, 'error')
                         return
 
-                # Stage 2: Collect rankings
-                yield send_event('stage2_start', stage='stage2')
-                stage2_results, label_to_model = await stage2_collect_rankings(message_history, stage1_results, council_models)
-                aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-                yield send_event('stage2_complete', {
-                    'data': stage2_results,
-                    'metadata': {
+                    # Execute workflow with streaming
+                    async for event in execute_workflow_stream(workflow_def, conversation, req.content):
+                        yield event
+
+                    # Wait for title if it was started
+                    if title_task:
+                        title = await title_task
+                        backend.storage.conversations.update_conversation_title(conversation_id, title, pid)
+                        yield send_event('title_complete', {'title': title}, 'title')
+
+                else:
+                    # ========== COUNCIL EXECUTION PATH (LEGACY) ==========
+                    # Get model configuration from conversation
+                    council_models = conversation.get("council_models")
+                    chairman_model = conversation.get("chairman_model")
+
+                    # Fallback to global config if not set (backward compatibility)
+                    if not council_models:
+                        from ..config import COUNCIL_MODELS
+                        council_models = COUNCIL_MODELS
+                    if not chairman_model:
+                        from ..config import CHAIRMAN_MODEL
+                        chairman_model = CHAIRMAN_MODEL
+
+                    # Start title generation in parallel (don't await yet)
+                    title_task = None
+                    if is_first_message:
+                        title_task = asyncio.create_task(generate_conversation_title(req.content))
+
+                    # Build message history including the new user message
+                    message_history = build_message_history(conversation)
+                    message_history.append({"role": "user", "content": req.content})
+
+                    # NOTE: Event names are now defined in stage_config.py for consistency
+                    # with frontend. You can use: get_stage_config("stage1").event_start
+                    # instead of hardcoded strings for better maintainability.
+
+                    # Stage 1: Collect responses
+                    yield send_event('stage1_start', stage='stage1')
+                    stage1_results = await stage1_collect_responses(message_history, council_models)
+                    yield send_event('stage1_complete', stage1_results, 'stage1')
+                    # Save partial state after stage1 with stream metadata
+                    backend.storage.conversations.save_partial_assistant_message(
+                        conversation_id, "stage1", stage1_results,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
+
+                    # Check heartbeat and send if needed
+                    heartbeat_event = check_and_send_heartbeat()
+                    if heartbeat_event:
+                        yield heartbeat_event
+                        if 'auth_expired' in heartbeat_event:
+                            return  # Stop stream if auth expired
+
+                    # Stage 1.5: Cross-interrogation (questions)
+                    yield send_event('stage1_5_questions_start', stage='stage1_5')
+                    questions_results, label_to_model_interrogation = await stage1_5_cross_interrogation(message_history, stage1_results, council_models)
+                    yield send_event('stage1_5_questions_complete', questions_results, 'stage1_5')
+
+                    # Stage 1.5: Collect answers
+                    yield send_event('stage1_5_answers_start', stage='stage1_5')
+                    answers_results = await stage1_5_collect_answers(message_history, stage1_results, questions_results, label_to_model_interrogation)
+                    yield send_event('stage1_5_answers_complete', {
+                        'data': answers_results,
+                        'label_to_model': label_to_model_interrogation
+                    }, 'stage1_5')
+                    # Save partial state after stage1_5 with stream metadata
+                    stage1_5_data = {
+                        'questions': questions_results,
+                        'answers': answers_results,
+                        'label_to_model': label_to_model_interrogation
+                    }
+                    backend.storage.conversations.save_partial_assistant_message(
+                        conversation_id, "stage1_5", stage1_5_data,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
+
+                    # Check heartbeat and send if needed
+                    heartbeat_event = check_and_send_heartbeat()
+                    if heartbeat_event:
+                        yield heartbeat_event
+                        if 'auth_expired' in heartbeat_event:
+                            return
+
+                    # Stage 2: Collect rankings
+                    yield send_event('stage2_start', stage='stage2')
+                    stage2_results, label_to_model = await stage2_collect_rankings(message_history, stage1_results, council_models)
+                    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+                    yield send_event('stage2_complete', {
+                        'data': stage2_results,
+                        'metadata': {
+                            'label_to_model': label_to_model,
+                            'aggregate_rankings': aggregate_rankings
+                        }
+                    }, 'stage2')
+                    # Save partial state after stage2 (with metadata)
+                    metadata = {
                         'label_to_model': label_to_model,
                         'aggregate_rankings': aggregate_rankings
                     }
-                }, 'stage2')
-                # Save partial state after stage2 (with metadata)
-                metadata = {
-                    'label_to_model': label_to_model,
-                    'aggregate_rankings': aggregate_rankings
-                }
-                storage.save_partial_assistant_message(
-                    conversation_id, "stage2", stage2_results, metadata=metadata,
-                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
-                )
+                    backend.storage.conversations.save_partial_assistant_message(
+                        conversation_id, "stage2", stage2_results, metadata=metadata,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
 
-                # Check heartbeat and send if needed
-                heartbeat_event = check_and_send_heartbeat()
-                if heartbeat_event:
-                    yield heartbeat_event
-                    if 'auth_expired' in heartbeat_event:
-                        return
+                    # Check heartbeat and send if needed
+                    heartbeat_event = check_and_send_heartbeat()
+                    if heartbeat_event:
+                        yield heartbeat_event
+                        if 'auth_expired' in heartbeat_event:
+                            return
 
-                # Stage 3: Synthesize final answer (with stage1_5 context)
-                yield send_event('stage3_start', stage='stage3')
-                stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
-                yield send_event('stage3_complete', stage3_result, 'stage3')
-                # Save partial state after stage3 (marks as complete, clears stream metadata)
-                storage.save_partial_assistant_message(
-                    conversation_id, "stage3", stage3_result,
-                    profile_id=pid, stream_id=stream_id, connection_token=connection_token
-                )
+                    # Stage 3: Synthesize final answer (with stage1_5 context)
+                    yield send_event('stage3_start', stage='stage3')
+                    stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
+                    yield send_event('stage3_complete', stage3_result, 'stage3')
+                    # Save partial state after stage3 (marks as complete, clears stream metadata)
+                    backend.storage.conversations.save_partial_assistant_message(
+                        conversation_id, "stage3", stage3_result,
+                        profile_id=pid, stream_id=stream_id, connection_token=connection_token
+                    )
 
-                # Wait for title generation if it was started
-                if title_task:
-                    title = await title_task
-                    storage.update_conversation_title(conversation_id, title, pid)
-                    yield send_event('title_complete', {'title': title}, 'title')
+                    # Wait for title generation if it was started
+                    if title_task:
+                        title = await title_task
+                        backend.storage.conversations.update_conversation_title(conversation_id, title, pid)
+                        yield send_event('title_complete', {'title': title}, 'title')
 
-                # Note: Assistant message already saved incrementally via save_partial_assistant_message()
-                # after each stage. No need to call add_assistant_message() here.
+                    # Note: Assistant message already saved incrementally via save_partial_assistant_message()
+                    # after each stage. No need to call add_assistant_message() here.
 
-                # Send completion event
-                yield send_event('complete', stage='complete')
+                    # Send completion event
+                    yield send_event('complete', stage='complete')
 
             finally:
                 # Always clear loading state, even if errors occurred
-                storage.set_conversation_loading(conversation_id, False, pid)
+                backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
         except Exception as e:
             # Set loading state to false on error (in case finally block didn't run)
-            storage.set_conversation_loading(conversation_id, False, pid)
+            backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
             # Send error event (without event ID since stream_id may not be initialized)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -822,7 +878,7 @@ async def resume_message_stream(
         raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")
 
     # Get stream metadata
-    stream_metadata = storage.get_stream_metadata(conversation_id, pid)
+    stream_metadata = backend.storage.conversations.get_stream_metadata(conversation_id, pid)
     if not stream_metadata:
         raise HTTPException(status_code=404, detail="No stream metadata found. Stream may have completed or expired.")
 
@@ -831,7 +887,7 @@ async def resume_message_stream(
         raise HTTPException(status_code=403, detail="Connection token mismatch")
 
     # Get conversation and last completed stage
-    conversation = storage.get_conversation(conversation_id, pid)
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -938,7 +994,7 @@ async def resume_message_stream(
                         'answers': answers_results,
                         'label_to_model': label_to_model_interrogation
                     }
-                    storage.save_partial_assistant_message(
+                    backend.storage.conversations.save_partial_assistant_message(
                         conversation_id, "stage1_5", stage1_5_data,
                         profile_id=pid, stream_id=stream_id, connection_token=connection_token
                     )
@@ -960,7 +1016,7 @@ async def resume_message_stream(
                         'label_to_model': label_to_model,
                         'aggregate_rankings': aggregate_rankings
                     }
-                    storage.save_partial_assistant_message(
+                    backend.storage.conversations.save_partial_assistant_message(
                         conversation_id, "stage2", stage2_results, metadata=metadata,
                         profile_id=pid, stream_id=stream_id, connection_token=connection_token
                     )
@@ -970,17 +1026,17 @@ async def resume_message_stream(
                     yield send_event('stage3_start', stage='stage3')
                     stage3_result = await stage3_synthesize_final(message_history, stage1_results, stage2_results, chairman_model, stage1_5_data)
                     yield send_event('stage3_complete', stage3_result, 'stage3')
-                    storage.save_partial_assistant_message(
+                    backend.storage.conversations.save_partial_assistant_message(
                         conversation_id, "stage3", stage3_result,
                         profile_id=pid, stream_id=stream_id, connection_token=connection_token
                     )
 
             # Send completion
             yield send_event('complete', stage='complete')
-            storage.set_conversation_loading(conversation_id, False, pid)
+            backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
         except Exception as e:
-            storage.set_conversation_loading(conversation_id, False, pid)
+            backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -993,6 +1049,67 @@ async def resume_message_stream(
     )
 
 
+@router.post("/{conversation_id}/message/stream/cancel")
+@limiter.limit("10/minute")
+async def cancel_stream(
+    request: Request,
+    conversation_id: str,
+    profile_id: Optional[str] = Query(None),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Cancel an in-progress stream.
+    Clears stream metadata to prevent resume.
+    NOTE: Cannot interrupt in-progress LLM API calls.
+    """
+    pid = get_profile_id_for_request(user, profile_id)
+
+    # Get connection token from request body
+    try:
+        body = await request.json()
+        connection_token = body.get("connection_token")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    if not connection_token:
+        raise HTTPException(status_code=400, detail="connection_token is required")
+
+    # Validate connection token
+    try:
+        token_data = auth.verify_connection_token(connection_token)
+        if not token_data:
+            raise HTTPException(status_code=401, detail="Invalid or expired connection token")
+
+        # Verify token belongs to this conversation
+        if token_data.get("conversation_id") != conversation_id:
+            raise HTTPException(status_code=403, detail="Connection token does not match conversation")
+
+        # Verify user ownership if authenticated
+        token_user_id = token_data.get("sub")
+        if user and token_user_id != user["id"]:
+            raise HTTPException(status_code=403, detail="Connection token does not belong to current user")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"[CANCEL] Token validation error: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")
+
+    # Clear stream metadata
+    conversation = backend.storage.conversations.get_conversation(conversation_id, pid)
+    if conversation:
+        if "_stream_metadata" in conversation:
+            del conversation["_stream_metadata"]
+            backend.storage.conversations._save_conversation(conversation_id, conversation, pid)
+
+        # Clear loading state
+        backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
+
+    return {"success": True, "message": "Stream cancelled"}
+
+
 @router.get("/{conversation_id}/encryption-status")
 async def get_encryption_status(
     conversation_id: str,
@@ -1002,7 +1119,7 @@ async def get_encryption_status(
     """Get the encryption status of a conversation."""
     pid = get_profile_id_for_request(user, profile_id)
     try:
-        status = storage.get_conversation_encryption_status(conversation_id, pid)
+        status = backend.storage.encryption.get_conversation_encryption_status(conversation_id, pid)
         return status
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1017,11 +1134,11 @@ async def encrypt_conversation(
     """Encrypt a conversation's messages."""
     pid = get_profile_id_for_request(user, profile_id)
     try:
-        conversation = storage.encrypt_conversation(conversation_id, pid)
+        conversation = backend.storage.encryption.encrypt_conversation(conversation_id, pid)
         return {
             "success": True,
             "message": "Conversation encrypted",
-            "status": storage.get_conversation_encryption_status(conversation_id, pid)
+            "status": backend.storage.encryption.get_conversation_encryption_status(conversation_id, pid)
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1036,11 +1153,11 @@ async def decrypt_conversation(
     """Decrypt a conversation's messages (save as plaintext)."""
     pid = get_profile_id_for_request(user, profile_id)
     try:
-        conversation = storage.decrypt_conversation(conversation_id, pid)
+        conversation = backend.storage.encryption.decrypt_conversation(conversation_id, pid)
         return {
             "success": True,
             "message": "Conversation decrypted",
-            "status": storage.get_conversation_encryption_status(conversation_id, pid)
+            "status": backend.storage.encryption.get_conversation_encryption_status(conversation_id, pid)
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1055,7 +1172,7 @@ async def publish_conversation(
     """Publish a conversation to the forum."""
     pid = get_profile_id_for_request(user, profile_id)
     try:
-        conversation = storage.publish_conversation(conversation_id, pid)
+        conversation = backend.storage.publish.publish_conversation(conversation_id, pid)
         return conversation
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1070,7 +1187,7 @@ async def unpublish_conversation(
     """Unpublish a conversation from the forum."""
     pid = get_profile_id_for_request(user, profile_id)
     try:
-        conversation = storage.unpublish_conversation(conversation_id, pid)
+        conversation = backend.storage.publish.unpublish_conversation(conversation_id, pid)
         return conversation
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

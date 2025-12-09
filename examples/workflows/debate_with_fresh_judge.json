@@ -1,0 +1,88 @@
+{
+  "flow_id": "debate_with_fresh_judge",
+  "global_timeout_ms": 180000,
+  "variables": [
+    {
+      "name": "debate_outputs",
+      "type": "string"
+    },
+    {
+      "name": "fresh_judgment",
+      "type": "string"
+    },
+    {
+      "name": "final_synthesis",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "initial_debate",
+      "description": "Multiple perspectives debate the question",
+      "map_phase": {
+        "workers": [
+          {
+            "worker_id": "technical_expert",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Analyze from a technical perspective. Predict what a technical expert would identify as key implementation details, feasibility concerns, and technical constraints."
+          },
+          {
+            "worker_id": "business_strategist",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Analyze from a business perspective. Predict what a business strategist would identify as market viability factors, ROI considerations, and strategic implications."
+          },
+          {
+            "worker_id": "user_advocate",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Analyze from a user experience perspective. Predict what a UX advocate would identify as key end-user needs, usability concerns, and accessibility considerations."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "simple_summary",
+        "model_ref": "openai/gpt-4",
+        "output_write_to": "debate_outputs",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": true
+        }
+      }
+    },
+    {
+      "step_id": "fresh_judgment",
+      "description": "Get unbiased judgment from a fresh model without prior context",
+      "map_phase": {
+        "workers": []
+      },
+      "reduce_phase": {
+        "strategy": "subquery_single_model",
+        "model_ref": "anthropic/claude-3.5-sonnet",
+        "output_write_to": "fresh_judgment",
+        "visibility": {
+          "include_original_input": true,
+          "include_conversation_history": false,
+          "include_worker_outputs": false,
+          "mask_worker_identities": true
+        },
+        "chairman_instructions": "Analyze this question independently and provide your best answer without being influenced by any prior discussion."
+      }
+    },
+    {
+      "step_id": "final_synthesis",
+      "description": "Synthesize the debate with the fresh perspective",
+      "map_phase": {
+        "workers": []
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "google/gemini-2.0-flash-exp",
+        "output_write_to": "final_synthesis",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        },
+        "chairman_instructions": "Compare the group debate with the independent fresh judgment. Synthesize the best insights from both approaches into a comprehensive final answer."
+      }
+    }
+  ]
+}

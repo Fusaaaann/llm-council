@@ -2,6 +2,58 @@
 
 Detailed history of all major updates and features implemented in LLM Council.
 
+## 2025-12-08
+
+### 🗄️ SQLite Migration
+
+Migrated core storage from JSON files to SQLite database for improved performance and reliability.
+
+**Changes:**
+- Replaced JSON file storage with SQLite database (`data/conversations.db`)
+- Modularized storage into `backend/storage/` directory
+  - `conversations.py` - Conversation CRUD (21k LOC)
+  - `database.py` - SQLite connection and schema
+  - `profiles.py` - Profile management
+  - `publish.py` - Publishing operations
+  - `registration.py` - User registration, waitlist, invites
+  - `audit.py` - Audit logging
+  - `encryption.py` - Encryption utilities
+  - `dsl.py` - DSL/workflow storage
+- Created `scripts/migrate_to_sqlite.py` for migrating legacy JSON files
+- Preserved encryption support for messages at rest
+- Maintained backward compatibility via migration script
+
+**Benefits:**
+- Better performance for large conversation sets
+- ACID transactions for data integrity
+- Simpler backup (single database file)
+- Foundation for future features (full-text search, analytics)
+
+**Files Created:**
+- `backend/storage/` - New modular storage directory
+- `scripts/migrate_to_sqlite.py` - Migration script
+
+**Files Removed:**
+- `backend/storage.py` - Replaced by modular storage/
+- `backend/audit.py` - Moved to storage/audit.py
+
+---
+
+### 📊 Ranking Algorithms
+
+Added advanced ranking algorithms including perspective matrix for multi-dimensional evaluation.
+
+**Features:**
+- Perspective matrix ranking system
+- Multiple ranking algorithm support
+- Not yet integrated into main council flow
+
+**Files Created:**
+- `backend/ranking_algorithms.py` - Advanced ranking implementations
+- `test_perspective_matrix.py` - Test suite
+
+---
+
 ## 2025-12-02
 
 ### 🔄 Token Refresh Race Condition Fix

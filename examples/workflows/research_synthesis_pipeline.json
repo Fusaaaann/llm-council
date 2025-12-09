@@ -1,0 +1,73 @@
+{
+  "flow_id": "research_synthesis_pipeline",
+  "global_timeout_ms": 180000,
+  "variables": [
+    {
+      "name": "literature_review",
+      "type": "string"
+    },
+    {
+      "name": "synthesized_findings",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "analyze_literature",
+      "description": "Research Synthesis & Analysis Pipeline - Initial Review",
+      "map_phase": {
+        "concurrency_limit": 3,
+        "global_instruction_overlay": "Workflow Purpose: Research Synthesis & Analysis\n\nContext: Academic researchers and analysts requiring rigorous literature synthesis\n\nPriorities: accurate, comprehensive, methodologically sound\n\nConstraints: Must cite evidence, identify gaps, maintain objectivity",
+        "workers": [
+          {
+            "worker_id": "methodology_reviewer",
+            "model_ref": "openai/gpt-4-turbo",
+            "instruction": "Evaluate research methodologies, experimental designs, and statistical validity. Identify methodological strengths and limitations."
+          },
+          {
+            "worker_id": "findings_synthesizer",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Extract and synthesize key findings, patterns, and insights. Identify consensus areas and contradictions in the literature."
+          },
+          {
+            "worker_id": "gap_analyst",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Identify research gaps, unanswered questions, and areas requiring further investigation. Suggest future research directions."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "simple_summary",
+        "model_ref": "anthropic/claude-3.5-sonnet",
+        "output_write_to": "literature_review",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        }
+      }
+    },
+    {
+      "step_id": "critical_synthesis",
+      "description": "Critical synthesis of reviewed literature",
+      "map_phase": {
+        "workers": [
+          {
+            "worker_id": "critical_analyst",
+            "model_ref": "openai/gpt-4-turbo",
+            "instruction": "Critically synthesize the literature review into coherent themes. Challenge assumptions and evaluate theoretical frameworks."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "openai/gpt-4-turbo",
+        "output_write_to": "synthesized_findings",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        },
+        "chairman_instructions": "Produce a comprehensive research synthesis with:\n\n1. Executive Summary (key findings in 2-3 paragraphs)\n2. Main Themes & Patterns (organized by topic)\n3. Methodological Considerations (quality assessment)\n4. Areas of Consensus vs. Debate\n5. Research Gaps & Future Directions\n6. Practical Implications (if applicable)\n7. References to Key Studies\n\nMaintain academic rigor and objectivity throughout."
+      }
+    }
+  ]
+}

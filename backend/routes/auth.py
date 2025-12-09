@@ -3,7 +3,11 @@
 from fastapi import APIRouter, HTTPException, Request, Depends
 from typing import Dict, Any
 
-from .. import config, storage, auth, audit
+import backend.storage.registration
+
+from ..storage import audit
+
+from .. import config, auth
 from ..auth_middleware import ensure_user_logged_in
 from ..models import RegisterRequest, LoginRequest, RefreshTokenRequest, WaitlistRequest
 from ..rate_limiter import limiter
@@ -155,7 +159,7 @@ async def join_waitlist(request: Request, waitlist_data: WaitlistRequest):
     client_ip = request.client.host if request.client else None
 
     try:
-        entry = storage.add_to_waitlist(waitlist_data.email, waitlist_data.name)
+        entry = backend.storage.registration.add_to_waitlist(waitlist_data.email, waitlist_data.name)
 
         audit.log_waitlist_submission(waitlist_data.email, ip_address=client_ip)
 
@@ -176,9 +180,9 @@ async def validate_invite(token: str, request: Request):
     """Validate an invite token."""
     client_ip = request.client.host if request.client else None
 
-    is_valid, error = storage.validate_invite_token(token)
+    is_valid, error = backend.storage.registration.validate_invite_token(token)
 
-    invite = storage.get_invite_token(token) if is_valid else None
+    invite = backend.storage.registration.get_invite_token(token) if is_valid else None
     audit.log_invite_validation(
         token,
         "success" if is_valid else "failure",

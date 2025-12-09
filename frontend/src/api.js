@@ -39,7 +39,7 @@ function getAuthHeaders() {
     headers['Authorization'] = `Bearer ${token}`;
     console.log('[API] Adding auth header:', token.substring(0, 10) + '...');
   } else {
-    console.warn('[API] No access token available for auth header');
+    console.debug('[API] No access token available for auth header');
   }
   return headers;
 }
@@ -259,8 +259,9 @@ export const api = {
    * @param {boolean} usesByok - Whether the conversation uses bring-your-own-key
    * @param {string[]} councilModels - Optional list of council model identifiers
    * @param {string} chairmanModel - Optional chairman model identifier
+   * @param {string} workflowJson - Optional workflow DSL JSON string
    */
-  async createConversation(usesByok = false, councilModels = null, chairmanModel = null) {
+  async createConversation(usesByok = false, councilModels = null, chairmanModel = null, workflowJson = null) {
     const profileId = getCurrentProfileId();
     const response = await fetchWithAuth(
       `${API_BASE}/api/conversations?profile_id=${profileId}`,
@@ -269,7 +270,8 @@ export const api = {
         body: JSON.stringify({
           uses_byok: usesByok,
           council_models: councilModels,
-          chairman_model: chairmanModel
+          chairman_model: chairmanModel,
+          workflow_json: workflowJson
         }),
       }
     );
@@ -346,13 +348,28 @@ export const api = {
       if (eventType === 'stream_init') {
         streamContext.connectionToken = event.connection_token;
         streamContext.streamId = event.stream_id;
-        console.log('[API] Connection token received for stream:', event.stream_id);
+
+        // Persist to sessionStorage for page refresh recovery
+        sessionStorage.setItem(
+          `llm_council_stream_${streamContext.conversationId}`,
+          JSON.stringify({
+            connectionToken: event.connection_token,
+            streamId: event.stream_id,
+            startTime: Date.now()
+          })
+        );
+
+        console.log('[API] Connection token received and saved to sessionStorage:', event.stream_id);
         // Don't pass stream_init to caller (internal event)
         return;
       }
 
       if (eventType === 'complete') {
         streamContext.receivedComplete = true;
+
+        // Clear sessionStorage on completion
+        sessionStorage.removeItem(`llm_council_stream_${streamContext.conversationId}`);
+        console.log('[API] Stream completed, cleared sessionStorage');
       }
 
       onEvent(eventType, event);
@@ -610,6 +627,42 @@ export const api = {
   },
 
   /**
+   * Cancel an in-progress stream.
+   * @param {string} conversationId - The conversation ID
+   * @param {string} connectionToken - Connection token from original stream
+   * @returns {Promise<void>}
+   */
+  async cancelStream(conversationId, connectionToken) {
+    // Validate that we have a connection token
+    if (!connectionToken) {
+      console.log('[API] No connection token provided, skipping backend cancel');
+      return { success: true, message: 'No active stream to cancel' };
+    }
+
+    const profileId = getCurrentProfileId();
+
+    console.log('[API] Cancelling stream with connection token');
+
+    const response = await fetchWithAuth(
+      `${API_BASE}/api/conversations/${conversationId}/message/stream/cancel?profile_id=${profileId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ connection_token: connectionToken }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to cancel stream: ${errorText}`);
+    }
+
+    return response.json();
+  },
+
+  /**
    * Rename a conversation.
    */
   async renameConversation(conversationId, title) {
@@ -628,9 +681,13 @@ export const api = {
   },
 
   /**
-   * Update conversation models (only allowed before first message).
+   * Update conversation models or workflow (only allowed before first message).
+   * @param {string} conversationId - Conversation ID
+   * @param {string[]} councilModels - Council model identifiers (optional if workflowJson provided)
+   * @param {string} chairmanModel - Chairman model identifier (optional if workflowJson provided)
+   * @param {string} workflowJson - Workflow DSL JSON string (optional, overrides council config)
    */
-  async updateConversationModels(conversationId, councilModels, chairmanModel) {
+  async updateConversationModels(conversationId, councilModels = null, chairmanModel = null, workflowJson = null) {
     const profileId = getCurrentProfileId();
     const response = await fetchWithAuth(
       `${API_BASE}/api/conversations/${conversationId}/models?profile_id=${profileId}`,
@@ -639,6 +696,7 @@ export const api = {
         body: JSON.stringify({
           council_models: councilModels,
           chairman_model: chairmanModel,
+          workflow_json: workflowJson,
         }),
       }
     );
@@ -700,7 +758,17 @@ export const api = {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    function sanitizeTitle(title) {
+      return title.normalize('NFKD')  // Normalize Unicode (decomposes characters)
+      .replace(/[\p{Cc}\p{Cf}]/gu, '')  // Remove control & format chars (native)
+      .replace(/[<>:"'/\\|?*]/g, '')  // Remove invalid filename chars
+      .replace(/…/g, '...')  // Replace ellipsis
+      .replace(/[’‘’]/g, "'")  // Replace fancy apostrophes
+      .replace(/[“”]/g, '"')  // Replace fancy quotes
+      .trim().replace(/\s+/g, '-')  // Replace spaces with hyphens
+      .substring(0, 100);
+    }
+    a.download = sanitizeTitle(filename);
 
     document.body.appendChild(a);
     a.click();
@@ -1030,5 +1098,25 @@ export const api = {
       onEvent('error', { message: 'Connection lost' });
       throw error;
     }
+  },
+
+  /**
+   * Validate a workflow definition without saving.
+   * @param {object} workflowRequest - Request object with name and workflow fields
+   * @returns {Promise<object>} Validation result with valid and errors fields
+   */
+  async validateWorkflow(workflowRequest) {
+    const response = await fetch(`${API_BASE}/api/workflows/validate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(workflowRequest),
+    });
+
+    if (!response.ok) {
+      const errorMessage = await parseErrorResponse(response);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
   },
 };

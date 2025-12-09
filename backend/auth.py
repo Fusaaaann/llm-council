@@ -10,9 +10,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import jwt
 from passlib.hash import bcrypt
+
+import backend.storage.profiles
+import backend.storage.registration
+
+from .storage.database import get_db_connection
 from .encryption import FernetProvider, encrypt_data, decrypt_data, create_encryption_metadata, is_encrypted
 from .config import ENCRYPTION_ENABLED, ENCRYPTION_KEY
-from .storage import get_db_connection, init_database
+from .storage.database import init_database
 
 # JWT Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
@@ -551,20 +556,19 @@ def create_user(email: str, password: str, name: str, invite_token: Optional[str
 
     # Validate invite token if provided
     if invite_token:
-        from . import  storage
-        is_valid, error = storage.validate_invite_token(invite_token)
+        is_valid, error = backend.storage.registration.validate_invite_token(invite_token)
         if not is_valid:
             raise ValueError(error)
 
         # Mark token as used
-        storage.mark_invite_used(invite_token, email)
+        backend.storage.registration.mark_invite_used(invite_token, email)
 
     user_id = generate_user_id()
 
     # Create default profile for user
     from . import  storage
     profile_id = f"profile_{user_id}"
-    storage.create_profile(profile_id, f"{name}'s Profile", {})
+    backend.storage.profiles.create_profile(profile_id, f"{name}'s Profile", {})
 
     user = {
         "id": user_id,

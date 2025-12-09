@@ -20,7 +20,7 @@ This document summarizes the security improvements implemented for LLM Council t
 
 **Files Modified:**
 - [backend/auth.py](backend/auth.py) - Added encrypted load/save functions
-- [backend/storage.py](backend/storage.py) - Added invite encryption functions
+- [backend/storage/registration.py](backend/storage/registration.py) - Added invite encryption functions
 - [backend/encryption.py](backend/encryption.py) - Already supported (no changes needed)
 
 ### 2. ✅ JWT Secret Key Auto-Generation (CRITICAL)
@@ -110,7 +110,7 @@ This document summarizes the security improvements implemented for LLM Council t
 - Captures: timestamp, event type, user ID/email, IP address, user agent
 
 **Files Created:**
-- [backend/audit.py](backend/audit.py) - Audit logging system
+- [backend/storage/audit.py](backend/storage/audit.py) - Audit logging system
 
 **Files Modified:**
 - [backend/main.py](backend/main.py) - Integrated audit logging in all auth endpoints
@@ -325,13 +325,13 @@ cat data/audit.log | jq -r 'select(.event_type=="profile_access" and .result=="d
 
 1. `backend/startup_validation.py` - Fail-fast security checks
 2. `backend/security_middleware.py` - Security headers
-3. `backend/audit.py` - Audit logging system
+3. `backend/storage/audit.py` - Audit logging system
 4. `SECURITY_IMPLEMENTATION.md` - This document
 
 ## 📝 Files Modified
 
 1. `backend/auth.py` - Encryption, lockout, token rotation
-2. `backend/storage.py` - Invite encryption
+2. `backend/storage/registration.py` - Invite encryption
 3. `backend/main.py` - Integration of all security features
 4. `backend/auth_middleware.py` - Profile access control
 5. `backend/config.py` - Security settings

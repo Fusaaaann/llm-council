@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from cryptography.fernet import Fernet, InvalidToken
 
+from backend.config import ENCRYPTION_ENABLED, ENCRYPTION_KEY
+
 
 class EncryptionProvider(ABC):
     """Abstract base class for encryption providers."""
@@ -191,3 +193,19 @@ def is_encrypted(data: Dict) -> bool:
         True if data has encryption metadata, False otherwise
     """
     return "_encryption" in data or "messages_encrypted" in data
+
+
+def get_encryption_provider() -> Optional[FernetProvider]:
+    """
+    Get encryption provider if encryption is enabled.
+
+    Returns:
+        FernetProvider instance or None if encryption disabled
+    """
+    if not ENCRYPTION_ENABLED:
+        return None
+
+    if not ENCRYPTION_KEY:
+        raise ValueError("ENCRYPTION_KEY not configured but encryption is enabled")
+
+    return FernetProvider(ENCRYPTION_KEY.encode('utf-8'))

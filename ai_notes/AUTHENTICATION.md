@@ -111,12 +111,12 @@ Adds comprehensive security headers to all responses:
 
 ### Waitlist & Invite System
 
-**Storage Layer (`storage.py`):**
+**Storage Layer (`storage/registration.py`):**
 - Waitlist management: `add_to_waitlist()`, `list_waitlist()`, `mark_waitlist_invited()`
 - Invite tokens: `create_invite_token()`, `get_invite_token()`, `validate_invite_token()`, `mark_invite_used()`, `list_invite_tokens()`
-- Encryption functions: `load_invites()` / `save_invites()`: Encrypt/decrypt invite tokens at rest
-- Waitlist storage: `data/waitlist.json`
-- Invite storage: `data/invites.json` **(encrypted)**
+- Encryption functions: Encrypt/decrypt invite tokens at rest
+- Waitlist storage: SQLite `waitlist` table
+- Invite storage: SQLite `invites` table **(encrypted)**
 
 **CLI Tool:**
 - `scripts/generate_invite.py` for admin invite management

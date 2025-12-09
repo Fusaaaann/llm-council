@@ -7,7 +7,7 @@ import { api, API_BASE } from './api';
 import { isAuthenticated, getCurrentUser, setAuth, clearAuth, getProfileIdKey } from './auth';
 import { useQueryState } from './queryState.jsx';
 import { createStreamEventHandler, ensureAssistantMessage } from './eventHandler';
-import { SPECIAL_EVENTS } from './stageConfig';
+import { SPECIAL_EVENTS, isWorkflowEvent } from './stageConfig';
 import './App.css';
 
 function App() {
@@ -71,7 +71,8 @@ function App() {
             prev.map(conv => conv.id === data.id ? data : conv)
           );
           // If current conversation was updated, refresh it
-          if (currentConversationId === data.id) {
+          // Don't reload during active streaming - wait for completion
+          if (currentConversationId === data.id && !isLoading) {
             loadConversation(data.id);
           }
           break;
@@ -159,6 +160,184 @@ function App() {
     }
   }, [currentConversationId]);
 
+  // Auto-resume incomplete streams after page load/refresh
+  useEffect(() => {
+    const resumeIncompleteStream = async () => {
+      if (!currentConversationId || !currentConversation) return;
+
+      // Skip if already loading (avoid duplicate resumes)
+      if (isLoading) return;
+
+      // Check if conversation is in loading state (backend still processing)
+      const isBackendLoading = currentConversation.loading_state === true;
+
+      if (isBackendLoading) {
+        // Check for persisted stream token
+        const streamDataJson = sessionStorage.getItem(`llm_council_stream_${currentConversationId}`);
+
+        if (streamDataJson) {
+          try {
+            const { connectionToken, streamId } = JSON.parse(streamDataJson);
+            console.log('[App] 🔄 Detected incomplete stream on page load, resuming...', streamId);
+
+            // Set loading UI state
+            setIsLoading(true);
+            const controller = new AbortController();
+            setAbortController(controller);
+
+            // Initialize queryState
+            queryState.startQuery(currentConversationId);
+
+            // Ensure assistant message exists in local state
+            const lastMsg = currentConversation.messages[currentConversation.messages.length - 1];
+            if (lastMsg?.role === 'assistant') {
+              ensureAssistantMessage(setCurrentConversation);
+            }
+
+            // Create event handler
+            const streamEventHandler = createStreamEventHandler({
+              updateQueryState: queryState.updateStageStatus,
+              setConversation: setCurrentConversation
+            });
+
+            // Resume stream
+            await api.resumeMessageStream(
+              currentConversationId,
+              connectionToken,
+              controller.signal,
+              (eventType, event) => {
+                // Handle stage events
+                const handled = streamEventHandler(eventType, event, currentConversationId);
+
+                if (handled) {
+                  // Special handling for council stage1_start
+                  if (eventType === 'stage1_start') {
+                    ensureAssistantMessage(setCurrentConversation, 'council');
+                  }
+                  // Special handling for council stage3_complete
+                  else if (eventType === 'stage3_complete') {
+                    setIsLoading(false);
+                  }
+                  // Special handling for workflow stream_init
+                  else if (eventType === 'stream_init' && isWorkflowEvent(eventType)) {
+                    ensureAssistantMessage(setCurrentConversation, 'workflow');
+                  }
+                  // Special handling for workflow complete
+                  else if (eventType === 'complete' && event.final_variables) {
+                    setIsLoading(false);
+                  }
+                  return;
+                }
+
+                // Handle special events
+                switch (eventType) {
+                  case SPECIAL_EVENTS.TITLE_COMPLETE:
+                    // Optimistically update title
+                    if (event.data && event.data.title) {
+                      const newTitle = event.data.title;
+                      setConversations((prev) =>
+                        prev.map((conv) =>
+                          conv.id === currentConversationId ? { ...conv, title: newTitle } : conv
+                        )
+                      );
+                      setCurrentConversation((prev) =>
+                        prev && prev.id === currentConversationId ? { ...prev, title: newTitle } : prev
+                      );
+                    }
+                    loadConversations();
+                    break;
+
+                  case SPECIAL_EVENTS.COMPLETE:
+                    queryState.completeQuery(currentConversationId);
+                    loadConversations();
+                    setIsLoading(false);
+                    setAbortController(null);
+                    sessionStorage.removeItem(`llm_council_stream_${currentConversationId}`);
+                    break;
+
+                  case SPECIAL_EVENTS.ERROR:
+                    console.error('[Resume] Stream error:', event.message);
+                    queryState.cancelQuery(currentConversationId);
+                    setIsLoading(false);
+                    setAbortController(null);
+                    sessionStorage.removeItem(`llm_council_stream_${currentConversationId}`);
+                    break;
+
+                  case SPECIAL_EVENTS.RECONNECTED:
+                    console.log('[Resume] ✅ Reconnected after page refresh');
+                    setReconnectionStatus(null);
+                    break;
+
+                  case SPECIAL_EVENTS.HEARTBEAT:
+                    console.log('[Resume] Heartbeat received at', new Date(event.timestamp * 1000));
+                    break;
+
+                  case SPECIAL_EVENTS.AUTH_EXPIRED:
+                    console.log('[Resume] Auth expired:', event.reason);
+                    setIsLoading(false);
+                    setAbortController(null);
+                    setReconnectionStatus(null);
+                    sessionStorage.removeItem(`llm_council_stream_${currentConversationId}`);
+
+                    if (event.reason === 'logged_out') {
+                      alert(event.message || 'Session ended. Please log in again.');
+                      handleLogout();
+                    } else {
+                      api.refreshAccessToken()
+                        .then(refreshed => {
+                          if (!refreshed) {
+                            alert('Session expired. Please log in again.');
+                            handleLogout();
+                          }
+                        })
+                        .catch(err => {
+                          console.error('[Resume] Token refresh error:', err);
+                          alert('Session expired. Please log in again.');
+                          handleLogout();
+                        });
+                    }
+                    break;
+
+                  default:
+                    break;
+                }
+              },
+              // Reconnection callback
+              (attempt, maxAttempts, delay) => {
+                console.log(`[Resume] Reconnection attempt ${attempt}/${maxAttempts} in ${delay}ms`);
+                setReconnectionStatus({ attempt, maxAttempts, delay: Math.round(delay / 1000) });
+              }
+            );
+
+            console.log('[App] ✅ Stream resumed successfully');
+
+          } catch (error) {
+            console.error('[App] ❌ Failed to resume stream:', error);
+
+            // Clean up on failure
+            sessionStorage.removeItem(`llm_council_stream_${currentConversationId}`);
+            queryState.cancelQuery(currentConversationId);
+            setIsLoading(false);
+            setAbortController(null);
+            setReconnectionStatus(null);
+
+            // Reload conversation to show partial results
+            await loadConversation(currentConversationId);
+          }
+        } else {
+          console.warn('[App] ⚠️ Conversation in loading state but no session token found');
+          // Backend is processing but we lost the token (old tab?)
+          // User will need to reload manually to see results
+        }
+      }
+    };
+
+    // Run when conversation loads
+    if (currentConversation && currentConversationId) {
+      resumeIncompleteStream();
+    }
+  }, [currentConversationId, currentConversation?.id, currentConversation?.loading_state]);
+
   const loadConversations = async () => {
     try {
       const convs = await api.listConversations(currentView);
@@ -189,6 +368,12 @@ function App() {
         : await api.getConversation(id);
       setCurrentConversation(conv);
     } catch (error) {
+      // Silently handle expected auth errors (logged out/expired)
+      if (error.message?.includes('Authentication expired') ||
+          error.message?.includes('No access token')) {
+        console.debug('[App] Skipping conversation load - auth required');
+        return;
+      }
       console.error('Failed to load conversation:', error);
     }
   };
@@ -331,11 +516,13 @@ function App() {
     setCurrentConversation(null);
   };
 
-  const handleUpdateModels = async (councilModels, chairmanModel) => {
+  const handleUpdateModels = async (councilModels, chairmanModel, workflowJson = '') => {
     try {
-      // Update conversation models if it's a new conversation (no messages yet)
+      // Update conversation models/workflow if it's a new conversation (no messages yet)
       if (currentConversationId && (!currentConversation?.messages || currentConversation.messages.length === 0)) {
-        await api.updateConversationModels(currentConversationId, councilModels, chairmanModel);
+        // Pass workflow_json if provided (empty string will be treated as null by backend)
+        const workflowJsonToSend = workflowJson && workflowJson.trim() ? workflowJson : null;
+        await api.updateConversationModels(currentConversationId, councilModels, chairmanModel, workflowJsonToSend);
         // Reload conversation to reflect changes
         await loadConversation(currentConversationId);
       }
@@ -379,16 +566,45 @@ function App() {
     await handleSendMessage(content, true);
   };
 
-  const handleCancelMessage = () => {
+  const handleCancelMessage = async () => {
     if (abortController) {
       abortController.abort();
       setAbortController(null);
     }
+
     // Cancel query state
     if (currentConversationId) {
       queryState.cancelQuery(currentConversationId);
+
+      // Tell backend to cancel (optional but recommended to prevent wasted processing)
+      const streamDataJson = sessionStorage.getItem(`llm_council_stream_${currentConversationId}`);
+      if (streamDataJson) {
+        try {
+          const { connectionToken } = JSON.parse(streamDataJson);
+
+          // Only call backend if we have a connection token
+          // (stream may not have started backend processing yet)
+          if (connectionToken) {
+            await api.cancelStream(currentConversationId, connectionToken);
+            console.log('[App] Backend stream cancelled');
+          } else {
+            console.log('[App] No connection token yet, stream cancelled locally only');
+          }
+        } catch (error) {
+          console.error('[App] Failed to cancel backend stream:', error);
+          // Continue with cleanup even if backend cancel fails
+        }
+      } else {
+        console.log('[App] No stream metadata in sessionStorage, stream cancelled locally only');
+      }
+
+      // Clear sessionStorage to prevent auto-resume on page refresh
+      sessionStorage.removeItem(`llm_council_stream_${currentConversationId}`);
+      console.log('[App] Stream cancelled, cleared sessionStorage');
     }
+
     setIsLoading(false);
+
     // Remove the partial assistant response
     setCurrentConversation((prev) => {
       const messages = [...prev.messages];
@@ -458,12 +674,20 @@ function App() {
           const handled = streamEventHandler(eventType, event, currentConversationId);
 
           if (handled) {
-            // Special handling for stage1_start to ensure assistant message exists
+            // Special handling for council stage1_start
             if (eventType === 'stage1_start') {
-              ensureAssistantMessage(setCurrentConversation);
+              ensureAssistantMessage(setCurrentConversation, 'council');
             }
-            // Special handling for stage3_complete to clear loading state early
+            // Special handling for council stage3_complete to clear loading state early
             else if (eventType === 'stage3_complete') {
+              setIsLoading(false);
+            }
+            // Special handling for workflow stream_init
+            else if (eventType === 'stream_init' && isWorkflowEvent(eventType)) {
+              ensureAssistantMessage(setCurrentConversation, 'workflow');
+            }
+            // Special handling for workflow complete
+            else if (eventType === 'complete' && event.final_variables) {
               setIsLoading(false);
             }
             return;

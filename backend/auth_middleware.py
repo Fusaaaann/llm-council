@@ -3,6 +3,8 @@
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, Dict, Any
+
+from .storage import profiles
 from .auth import verify_access_token, get_user_by_id
 from .config import ENVIRONMENT
 
@@ -102,7 +104,7 @@ async def ensure_user_logged_in(
     if ENVIRONMENT == "local" and not credentials:
         from .config import DEFAULT_PROFILE_ID
         return {
-            "id": "default_user",
+            "id": "default",
             "email": "local@localhost",
             "name": "Local User",
             "profile_id": DEFAULT_PROFILE_ID,
@@ -123,7 +125,7 @@ def user_has_profile_access(user_id: str, profile_id: str) -> bool:
     Returns:
         True if user has access, False otherwise
     """
-    from . import storage, auth as auth_module
+    from . import auth as auth_module
 
     # Get user data
     user = auth_module.get_user_by_id(user_id)
@@ -135,7 +137,7 @@ def user_has_profile_access(user_id: str, profile_id: str) -> bool:
         return True
 
     # Get profile data
-    profile = storage.get_profile(profile_id)
+    profile = profiles.get_profile(profile_id)
     if not profile:
         return False
 

@@ -18,7 +18,7 @@ os.environ["JWT_SECRET_KEY"] = "test-secret-integration"
 os.environ["ENCRYPTION_ENABLED"] = "false"
 
 from backend.main import app
-from backend import storage
+from backend.storage import database
 from tests.mocks.openrouter_mock import mock_query_model, mock_query_models_parallel
 import uvicorn
 
@@ -35,11 +35,8 @@ def backend_server():
     test_dir = Path(__file__).parent.parent.parent.parent / "data_integration_test"
     test_dir.mkdir(exist_ok=True)
 
-    storage.DATA_DIR = test_dir
-    storage.CONVERSATIONS_DIR = test_dir / "conversations"
-    storage.PROFILES_FILE = test_dir / "profiles.json"
-    storage.USERS_FILE = test_dir / "users.json"
-    storage.SESSIONS_FILE = test_dir / "sessions.json"
+    # Override storage paths for SQLite database
+    database.DATA_DIR = test_dir
 
     # Start server in thread
     server_thread = threading.Thread(

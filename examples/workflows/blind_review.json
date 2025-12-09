@@ -1,0 +1,45 @@
+{
+  "flow_id": "blind_review",
+  "global_timeout_ms": 180000,
+  "variables": [
+    {
+      "name": "final_answer",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "gather_responses",
+      "description": "Collect responses from multiple models",
+      "map_phase": {
+        "workers": [
+          {
+            "worker_id": "model_a",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Answer the user's question comprehensively and accurately."
+          },
+          {
+            "worker_id": "model_b",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Answer the user's question comprehensively and accurately."
+          },
+          {
+            "worker_id": "model_c",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Answer the user's question comprehensively and accurately."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "openai/gpt-4-turbo",
+        "output_write_to": "final_answer",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": true
+        },
+        "chairman_instructions": "Evaluate the responses without knowing which model produced them. Focus purely on the quality, accuracy, and completeness of the content. Synthesize the best aspects of each response into a comprehensive final answer."
+      }
+    }
+  ]
+}

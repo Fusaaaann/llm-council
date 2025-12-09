@@ -20,7 +20,7 @@ COUNCIL_MODELS = [
 CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
 
 # OpenRouter API endpoint
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_URL = os.getenv("OPENROUTER_BASE_URL","https://openrouter.ai/api/v1/chat/completions")
 
 # Environment mode: "local" or "production"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")

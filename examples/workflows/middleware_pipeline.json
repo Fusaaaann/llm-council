@@ -1,0 +1,63 @@
+{
+  "flow_id": "middleware_demo",
+  "global_timeout_ms": 180000,
+  "variables": [
+    {
+      "name": "final_answer",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "gather_and_filter",
+      "description": "Gather responses and apply middleware filtering",
+      "map_phase": {
+        "workers": [
+          {
+            "worker_id": "worker1",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Answer the question clearly and concisely."
+          },
+          {
+            "worker_id": "worker2",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Answer the question clearly and concisely."
+          },
+          {
+            "worker_id": "worker3",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Answer the question clearly and concisely."
+          }
+        ]
+      },
+      "middleware_phase": [
+        {
+          "op": "filter_regex",
+          "apply_to": ["*"],
+          "config": {
+            "pattern": "(?i)(sorry|cannot|unable|don't know)",
+            "action": "flag"
+          }
+        },
+        {
+          "op": "truncate",
+          "apply_to": ["*"],
+          "config": {
+            "max_length": 500,
+            "strategy": "smart"
+          }
+        }
+      ],
+      "reduce_phase": {
+        "strategy": "simple_summary",
+        "model_ref": "openai/gpt-4",
+        "output_write_to": "final_answer",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false,
+          "include_rejected_items": false
+        }
+      }
+    }
+  ]
+}

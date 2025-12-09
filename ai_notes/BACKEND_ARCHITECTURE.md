@@ -177,12 +177,22 @@ The backend uses a **modular route-based architecture** with FastAPI routers. Al
 - `Conversation`
 - `ConversationMetadata`
 
-### `storage.py` - JSON-Based Storage with Encryption
+### `storage/` - Modular Storage System
 
 **Storage Structure:**
-- JSON-based conversation storage in `data/conversations/profile_<id>/`
+- SQLite-based conversation storage in `data/conversations.db`
 - **Encryption support**: Messages encrypted at rest, metadata unencrypted
-- Profile-based directory structure for multi-tenancy
+- Modular architecture with separate concerns
+
+**Modules:**
+- `storage/database.py` - SQLite connection and table schema
+- `storage/conversations.py` - Conversation CRUD operations (21k LOC)
+- `storage/profiles.py` - Profile management
+- `storage/publish.py` - Publishing/unpublishing conversations
+- `storage/registration.py` - User registration, waitlist, invites
+- `storage/audit.py` - Audit logging
+- `storage/encryption.py` - Encryption utilities
+- `storage/dsl.py` - DSL storage (workflows)
 
 **Conversation Schema:**
 - `{id, profile_id, created_at, modified_at, title, messages[], is_public, published_at, sync_status, uses_byok}`
@@ -200,7 +210,7 @@ The backend uses a **modular route-based architecture** with FastAPI routers. Al
   - Cleared after stream completion or 2hr expiry
 - **Progressive message building**: `save_partial_assistant_message()` for incremental saves
 - **Encryption functions**: `get_encryption_provider()` - creates Fernet provider from config
-- **Backward compatible**: Transparently reads legacy unencrypted files, re-encrypts on save
+- **Backward compatible**: Transparently migrates from legacy JSON files
 
 **Profile Management:**
 - `list_profiles()`, `create_profile()`, `update_profile()`, `delete_profile()`

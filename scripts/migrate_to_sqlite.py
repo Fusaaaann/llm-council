@@ -25,10 +25,12 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+import backend.storage.database
+
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend import storage, auth
+from backend import auth
 from backend.config import DATA_DIR, PROFILES_FILE
 
 
@@ -163,7 +165,7 @@ def migrate_conversations(dry_run: bool = False) -> int:
                     print(f"   [DRY RUN] Would migrate: {conversation_id} (profile: {profile_id})")
                 else:
                     # Insert into database using storage
-                    with storage.get_db_connection() as conn:
+                    with backend.storage.database.get_db_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute(
                             """INSERT OR REPLACE INTO conversations
@@ -218,7 +220,7 @@ def migrate_profiles(dry_run: bool = False) -> int:
             if dry_run:
                 print(f"   [DRY RUN] Would migrate: {profile_id} - {profile.get('name', 'Unknown')}")
             else:
-                with storage.get_db_connection() as conn:
+                with backend.storage.database.get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """INSERT OR REPLACE INTO profiles (id, name, created_at, data)
@@ -262,7 +264,7 @@ def migrate_users(dry_run: bool = False) -> int:
 
     try:
         # Use auth load/save to handle encryption properly
-        from backend import auth
+        from backend import auth_prev as auth # retain old auth method to ensure decryption
 
         # Load users using original auth module (handles decryption)
         users = auth.load_users()
@@ -277,7 +279,7 @@ def migrate_users(dry_run: bool = False) -> int:
                 print(f"   [DRY RUN] Would migrate: {user.get('email', 'Unknown')}")
             else:
                 # Insert into database
-                with storage.get_db_connection() as conn:
+                with backend.storage.database.get_db_connection() as conn:
                     cursor = conn.cursor()
 
                     # Prepare data (let auth handle encryption)
@@ -336,8 +338,8 @@ def migrate_sessions(dry_run: bool = False) -> int:
         return 0
 
     try:
-        # Use auth module to handle decryption
-        from backend import auth
+        # Use old auth module to handle decryption
+        from backend import auth_prev as auth
 
         sessions = auth.load_sessions()
 
@@ -387,7 +389,7 @@ def validate_migration(stats: MigrationStats) -> bool:
             return False
 
         # Check we can connect
-        with storage.get_db_connection() as conn:
+        with backend.storage.database.get_db_connection() as conn:
             cursor = conn.cursor()
 
             # Count records in each table
@@ -443,7 +445,7 @@ def main():
     # Initialize database
     if not args.dry_run:
         print("\n🗄️  Initializing SQLite database...")
-        storage.init_database()
+        backend.storage.database.init_database()
         print("   ✓ Database initialized")
 
     # Create backup (unless --no-backup or --dry-run)

@@ -306,14 +306,17 @@ class RSAProvider(EncryptionProvider):
 
 ```
 backend/
-├── encryption.py      # Encryption provider classes and utilities
-├── storage.py         # Modified for encrypt/decrypt on save/load
-├── config.py          # Encryption configuration settings
+├── encryption.py            # Encryption provider classes and utilities
+├── storage/
+│   ├── conversations.py     # Conversation storage with encrypt/decrypt
+│   ├── encryption.py        # Encryption utilities
+│   └── ...
+├── config.py                # Encryption configuration settings
 ├── ...
 
-generate_encryption_key.py   # Key generation utility
-test_encryption.py            # Comprehensive test suite
-.env                          # Contains ENCRYPTION_KEY (DO NOT COMMIT)
+scripts/generate_encryption_key.py   # Key generation utility
+tests/test_encryption.py              # Comprehensive test suite
+.env                                  # Contains ENCRYPTION_KEY (DO NOT COMMIT)
 ```
 
 ## Future Enhancements

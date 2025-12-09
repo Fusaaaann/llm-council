@@ -4,7 +4,7 @@ Complete implementation details for the storage system in LLM Council, including
 
 ## Overview
 
-Backend-first JSON storage with encryption support, profile-based multi-tenancy, and public/private conversation model.
+Backend-first SQLite storage with encryption support, profile-based multi-tenancy, and public/private conversation model.
 
 ## Current Implementation: Backend-First
 
@@ -18,19 +18,17 @@ User Action → API Call → Backend → Storage → Response → UI Update
 **Directory Layout:**
 ```
 data/
-├── conversations/
-│   ├── profile_default/
-│   │   ├── <conversation_id_1>.json
-│   │   └── <conversation_id_2>.json
-│   └── profile_<user_id>/
-│       └── <conversation_id_3>.json
-├── profiles.json
-├── users.json (encrypted)
-├── sessions.json (encrypted)
-├── invites.json (encrypted)
-├── waitlist.json
+├── conversations.db (SQLite database)
 └── audit.log
 ```
+
+**SQLite Tables:**
+- `conversations` - Conversation metadata and messages
+- `profiles` - User profiles
+- `users` - User accounts (encrypted)
+- `sessions` - Active sessions (encrypted)
+- `invites` - Invite codes (encrypted)
+- `waitlist` - Waitlist entries
 
 ### Benefits
 - Centralized data management
@@ -38,7 +36,7 @@ data/
 - Consistent across all devices
 - No browser storage limits
 
-## Conversation Storage (`storage.py`)
+## Conversation Storage (`storage/conversations.py`)
 
 ### Conversation Schema
 
@@ -155,7 +153,7 @@ Stores checkpoint data for stream resumption:
 - Preserves all existing fields
 - Used for resilience (partial data preserved on crashes)
 
-## Encryption (`encryption.py`)
+## Encryption (`storage/encryption.py` and `encryption.py`)
 
 ### Overview
 - Symmetric encryption using Fernet (AES-128-CBC)
@@ -245,20 +243,22 @@ class RSAProvider(EncryptionProvider):
 - Checks for `_encryption` or `messages_encrypted` field
 
 **Migration:**
-- Legacy unencrypted files load transparently
-- Re-encrypted on next save (no manual migration)
+- Legacy JSON files migrated to SQLite via `scripts/migrate_to_sqlite.py`
+- Migration script handles both encrypted and unencrypted JSON files
 - Zero-downtime migration path
 
 **Example:**
 ```python
-conversation = storage.get_conversation(conversation_id, profile_id)
+from backend.storage import conversations
+
+conversation = conversations.get_conversation(conversation_id, profile_id)
 # Returns decrypted messages if encrypted, plain messages if not
 
 # Modify conversation
 conversation["title"] = "New Title"
 
 # Save re-encrypts automatically if encryption enabled
-storage.save_conversation(conversation, profile_id)
+conversations.save_conversation(conversation, profile_id)
 ```
 
 ### Security Considerations
@@ -300,15 +300,14 @@ storage.save_conversation(conversation, profile_id)
 - `delete_profile(profile_id)`: Delete profile (and all conversations)
 
 **Storage:**
-- Profiles stored in centralized `data/profiles.json`
+- Profiles stored in SQLite `profiles` table
 - Each profile has: `{id, name, created_at, owner_id}`
 
 ### Conversation Organization
 
-**Directory Structure:**
-- Conversations organized by profile_id
-- `data/conversations/profile_<id>/`
-- Each profile has separate conversation namespace
+**Database Structure:**
+- Conversations organized by `profile_id` column in SQLite
+- Each profile has separate conversation namespace via `profile_id` foreign key
 
 **Mode Handling:**
 - **Local mode**: Auto-uses "default" profile

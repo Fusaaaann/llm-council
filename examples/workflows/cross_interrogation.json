@@ -1,0 +1,155 @@
+{
+  "flow_id": "cross_interrogation_demo",
+  "global_timeout_ms": 300000,
+  "variables": [
+    {
+      "name": "stage1_responses",
+      "type": "string",
+      "description": "Initial responses from all models"
+    },
+    {
+      "name": "stage1_5_questions",
+      "type": "string",
+      "description": "Cross-interrogation questions (JSON)"
+    },
+    {
+      "name": "stage1_5_answers",
+      "type": "string",
+      "description": "Answers to cross-interrogation questions"
+    },
+    {
+      "name": "final_synthesis",
+      "type": "string",
+      "description": "Chairman's final synthesis"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "stage1",
+      "description": "Gather initial perspectives from council members",
+      "map_phase": {
+        "concurrency_limit": 3,
+        "workers": [
+          {
+            "worker_id": "worker_a",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Provide a comprehensive, well-reasoned answer. Analyze all relevant aspects thoroughly and structure your response clearly."
+          },
+          {
+            "worker_id": "worker_b",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Provide a balanced, nuanced response that considers multiple perspectives. Identify trade-offs and acknowledge different viewpoints."
+          },
+          {
+            "worker_id": "worker_c",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Provide a clear, structured, and accurate answer. Focus on precision and logical organization of information."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "simple_summary",
+        "model_ref": "google/gemini-2.0-flash-exp",
+        "output_write_to": "stage1_responses",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        }
+      }
+    },
+    {
+      "step_id": "stage1_5_questions",
+      "description": "Generate cross-interrogation questions about other responses",
+      "map_phase": {
+        "concurrency_limit": 3,
+        "global_instruction_overlay": "Here are the responses from different models:\n\n${stage1_responses}\n\nGenerate 1-2 focused follow-up questions for OTHER responses (not your own). Format as:\nQUESTIONS FOR Response [X]:\n1. [Your first question]\n2. [Your second question]",
+        "workers": [
+          {
+            "worker_id": "worker_a",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Review the responses and generate clarifying questions. Probe deeper into assumptions, explore edge cases, or clarify ambiguities you identify."
+          },
+          {
+            "worker_id": "worker_b",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Review the responses and generate clarifying questions. Probe deeper into assumptions, explore edge cases, or clarify ambiguities you identify."
+          },
+          {
+            "worker_id": "worker_c",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Review the responses and generate clarifying questions. Probe deeper into assumptions, explore edge cases, or clarify ambiguities you identify."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "cross_interrogation",
+        "model_ref": "google/gemini-2.0-flash-exp",
+        "output_write_to": "stage1_5_questions",
+        "variable_interpolation": true,
+        "visibility": {
+          "include_original_input": false,
+          "mask_worker_identities": false
+        }
+      }
+    },
+    {
+      "step_id": "stage1_5_answers",
+      "description": "Collect answers to cross-interrogation questions",
+      "map_phase": {
+        "concurrency_limit": 3,
+        "global_instruction_overlay": "Questions directed at you:\n\n${stage1_5_questions}\n\nPlease answer each question concisely. Defend your reasoning, elaborate where necessary, or acknowledge any overlooked aspects. Keep each answer brief (1-3 sentences).",
+        "workers": [
+          {
+            "worker_id": "worker_a",
+            "model_ref": "openai/gpt-4",
+            "instruction": "Answer the questions directed at your original response. Be clear and concise in your answers."
+          },
+          {
+            "worker_id": "worker_b",
+            "model_ref": "anthropic/claude-3.5-sonnet",
+            "instruction": "Answer the questions directed at your original response. Be clear and concise in your answers."
+          },
+          {
+            "worker_id": "worker_c",
+            "model_ref": "google/gemini-2.0-flash-exp",
+            "instruction": "Answer the questions directed at your original response. Be clear and concise in your answers."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "simple_summary",
+        "model_ref": "google/gemini-2.0-flash-exp",
+        "output_write_to": "stage1_5_answers",
+        "variable_interpolation": true,
+        "visibility": {
+          "include_original_input": false,
+          "mask_worker_identities": false
+        }
+      }
+    },
+    {
+      "step_id": "final_synthesis",
+      "description": "Chairman synthesizes all perspectives including Q&A",
+      "map_phase": {
+        "workers": [
+          {
+            "worker_id": "chairman",
+            "model_ref": "openai/gpt-4-turbo",
+            "instruction": "Synthesize all information into a comprehensive final answer. Integrate insights from initial responses and the Q&A discussion."
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "openai/gpt-4-turbo",
+        "output_write_to": "final_synthesis",
+        "variable_interpolation": true,
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false
+        },
+        "chairman_instructions": "You have access to:\n\n1. Initial Responses:\n${stage1_responses}\n\n2. Cross-Interrogation Q&A:\nQuestions: ${stage1_5_questions}\nAnswers: ${stage1_5_answers}\n\nSynthesize all of this into a comprehensive, accurate answer. Consider the initial responses, the probing questions that revealed deeper insights, and the clarifying answers. Provide a clear, well-reasoned final answer that represents the council's collective wisdom."
+      }
+    }
+  ]
+}

@@ -28,7 +28,7 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 **Key Modules:**
 - `routes/` - Organized by feature (auth, conversations, forum, profiles)
 - `council.py` - Core deliberation logic (4 stages)
-- `storage.py` - JSON storage with encryption support
+- `storage/` - Modular storage (SQLite + JSON, encryption, profiles, publishing)
 - `encryption.py` - Fernet provider for message encryption
 - `auth.py` - JWT tokens, refresh rotation, session management
 
@@ -49,11 +49,11 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 - `ChatInterface.jsx` - Input, stages, actions (edit/retry/cancel)
 - `Sidebar.jsx` - Conversation list with real-time updates
 
-**Stage Components:**
-- `Stage1.jsx` - Initial responses (tabs)
-- `Stage1_5.jsx` - Cross-interrogation Q&A (collapsible sections)
-- `Stage2.jsx` - Peer review rankings (tabs)
-- `Stage3.jsx` - Final synthesis (green highlight)
+**Rendering System:**
+- `UnifiedStage.jsx` - Adaptive component for council and workflow execution
+- Auto-detects execution mode (council vs workflow) from message structure
+- Council mode: Uses Stage1/2/3 components internally
+- Workflow mode: Variable-based display with progress tracking
 
 ## Detailed Documentation
 
@@ -69,6 +69,11 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 - [SSE Network Resilience](ai_notes/SSE_NETWORK_RESILIENCE.md) - Stream resumption, reconnection
 - [Streaming Token Fix](ai_notes/STREAMING_TOKEN_FIX.md) - Mid-stream token expiry solution
 - [Session Revocation on Shutdown](ai_notes/SESSION_REVOCATION_ON_SHUTDOWN.md) - Auto cleanup
+
+### Workflow System
+- [Workflow Model Requests](ai_notes/WORKFLOW_MODEL_REQUESTS.md) - How workflows request LLM models
+- [Workflow Quick Reference](ai_notes/WORKFLOW_QUICK_REFERENCE.md) - Quick guide for workflow developers
+- [Unified Stage Architecture](ai_notes/UNIFIED_STAGE_ARCHITECTURE.md) - Dual-mode rendering system
 
 ### Security
 - [Security Implementation](ai_notes/SECURITY_IMPLEMENTATION.md) - Full security hardening
@@ -119,9 +124,9 @@ User Query → POST /api/conversations/{id}/message/stream
 ```
 In-memory State (during stream)
     ↓
-storage.save_partial_assistant_message() after each stage
+storage.conversations.save_partial_assistant_message() after each stage
     ↓
-JSON file: data/conversations/profile_<id>/<conversation_id>.json
+SQLite database: data/conversations.db
 ```
 
 **Unencrypted:**
@@ -162,8 +167,21 @@ JSON file: data/conversations/profile_<id>/<conversation_id>.json
 
 See [Event Handling Architecture](ai_notes/EVENT_HANDLING.md) for details.
 
+### Unified Stage Rendering
+**Problem:** Separate UI components for council execution, no workflow support.
+
+**Solution:**
+- Single `UnifiedStage` component auto-detects execution mode
+- Council mode: Message has `stage1/2/3` fields → renders traditional tabs
+- Workflow mode: Message has `variables` field → renders variable display
+- Message detection utility ([messageDetection.js](frontend/src/utils/messageDetection.js))
+
+**Benefits:** Supports both execution modes, backward compatible, extensible.
+
+See [Unified Stage Architecture](ai_notes/UNIFIED_STAGE_ARCHITECTURE.md) for details.
+
 ### Backend-First Storage
-**Current:** All conversations stored on backend (`data/conversations/profile_<id>/`), REST API.
+**Current:** All conversations stored in SQLite database (`data/conversations.db`), REST API.
 
 **Alternative:** Local-first storage modules available but not integrated (`frontend/src/storage/`).
 
@@ -228,7 +246,16 @@ All ReactMarkdown components must be wrapped in `<div className="markdown-conten
 
 See [Changelog](ai_notes/CHANGELOG.md) for detailed update history.
 
-**Latest (2025-12-02):**
+**Latest (2025-12-09):**
+- 🎨 **Unified Stage Architecture** - Single adaptive component for council and workflow execution
+- 🔄 **Workflow UI Support** - Variable-based display with progress tracking
+- 🛠️ **Workflow Partial State Saving** - Backend now saves workflow variables incrementally
+
+**2025-12-08:**
+- 🗄️ **SQLite Migration** - Migrated core storage from JSON to SQLite
+- 📊 **Ranking Algorithms** - Added perspective matrix and advanced ranking
+
+**2025-12-02:**
 - 🔄 **Token Refresh Race Condition Fix** - Module-level lock prevents duplicate refresh attempts
 - ⚡ **Configuration-Driven Event Handling** - 75% code reduction (200 → 50 lines)
 
@@ -261,7 +288,6 @@ See [Changelog](ai_notes/CHANGELOG.md) for detailed update history.
 - Reasoning model support (o1, etc.)
 - ~~Rename/Delete~~ **DONE** ✓
 - ~~Stop/cancel~~ **DONE** ✓
-- Message pagination
 - PDF export
 - Integration tests
 - Email notifications
@@ -294,4 +320,4 @@ Store implementation details in [ai_notes/](ai_notes/) with descriptive filename
 - [frontend/src/storage/README.md](frontend/src/storage/README.md) - Local-first storage guide
 - `.env.example` - Configuration documentation
 
-**Last Major Update:** 2025-12-02 (Configuration-Driven Event Handling, Token Refresh Fix)
+**Last Major Update:** 2025-12-09 (Unified Stage Architecture - Workflow UI support)

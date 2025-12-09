@@ -5,10 +5,11 @@ import json
 import sys
 from pathlib import Path
 
+import backend.storage.conversations
+
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from backend import storage
 from backend.config import DEFAULT_PROFILE_ID
 
 
@@ -36,7 +37,7 @@ def test_legacy_format():
     print(f"\n📖 Loading conversation {conv_id} via storage API...")
 
     try:
-        loaded = storage.get_conversation(conv_id, DEFAULT_PROFILE_ID)
+        loaded = backend.storage.conversations.get_conversation(conv_id, DEFAULT_PROFILE_ID)
         if loaded is None:
             print("❌ Conversation not found in storage")
             return False
@@ -83,7 +84,7 @@ def test_encrypted_format():
     print(f"\n📖 Loading encrypted conversation {conv_id} via storage API...")
 
     try:
-        loaded = storage.get_conversation(conv_id, DEFAULT_PROFILE_ID)
+        loaded = backend.storage.conversations.get_conversation(conv_id, DEFAULT_PROFILE_ID)
         if loaded is None:
             print("❌ Conversation not found")
             return False
@@ -110,7 +111,7 @@ def test_re_encryption():
     try:
         # Load conversation
         print(f"📖 Loading conversation {conv_id}...")
-        conv = storage.get_conversation(conv_id, DEFAULT_PROFILE_ID)
+        conv = backend.storage.conversations.get_conversation(conv_id, DEFAULT_PROFILE_ID)
         if conv is None:
             print("❌ Conversation not found")
             return False
@@ -127,7 +128,7 @@ def test_re_encryption():
 
         # Re-save (will apply current encryption settings)
         print(f"\n💾 Re-saving conversation...")
-        storage.save_conversation(conv, DEFAULT_PROFILE_ID)
+        backend.storage.conversations.save_conversation(conv, DEFAULT_PROFILE_ID)
 
         # Check file state after re-save
         with open(conv_path, 'r') as f:
@@ -138,7 +139,7 @@ def test_re_encryption():
 
         # Verify can still load
         print(f"\n📖 Verifying can still load...")
-        reloaded = storage.get_conversation(conv_id, DEFAULT_PROFILE_ID)
+        reloaded = backend.storage.conversations.get_conversation(conv_id, DEFAULT_PROFILE_ID)
         if reloaded is None:
             print("❌ Failed to reload conversation")
             return False

@@ -33,10 +33,11 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import backend.storage.registration
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend import storage
 from backend.config import INVITE_TOKEN_EXPIRE_DAYS, API_BASE_URL
 
 
@@ -61,7 +62,7 @@ def generate_invite(email: str, days: int = None, notes: str = None) -> dict:
     expires_days = days if days is not None else INVITE_TOKEN_EXPIRE_DAYS
     expires_at = (datetime.utcnow() + timedelta(days=expires_days)).isoformat()
 
-    invite = storage.create_invite_token(
+    invite = backend.storage.registration.create_invite_token(
         token=token,
         email=email,
         expires_at=expires_at,
@@ -78,7 +79,7 @@ def list_invites(unused_only: bool = False):
     Args:
         unused_only: Only show unused invites
     """
-    invites = storage.list_invite_tokens(used=False if unused_only else None)
+    invites = backend.storage.registration.list_invite_tokens(used=False if unused_only else None)
 
     if not invites:
         print("No invite tokens found.")
@@ -108,7 +109,7 @@ def list_invites(unused_only: bool = False):
 
 def list_waitlist():
     """List all waitlist entries."""
-    entries = storage.list_waitlist()
+    entries = backend.storage.registration.list_waitlist()
 
     if not entries:
         print("No waitlist entries found.")
