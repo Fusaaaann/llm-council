@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './Sidebar.css';
 
 export default function Sidebar({
@@ -9,10 +9,33 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onExportConversation,
+  onPublishConversation,
+  onUnpublishConversation,
+  user,
+  onLogin,
+  onLogout,
+  onAbout,
+  currentView,
+  onViewChange,
 }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!openMenuId) return;
+
+    const handleClickOutside = (e) => {
+      // Check if click is on menu button or inside menu
+      if (!e.target.closest('.conversation-menu') && !e.target.closest('.menu-button')) {
+        setOpenMenuId(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openMenuId]);
 
   const handleMenuToggle = (convId, e) => {
     e.stopPropagation();
@@ -56,12 +79,81 @@ export default function Sidebar({
     setOpenMenuId(null);
   };
 
+  const handlePublish = (conv, e) => {
+    e.stopPropagation();
+    if (conv.uses_byok) {
+      alert('Cannot publish conversations that use your own API key (BYOK)');
+      return;
+    }
+    onPublishConversation(conv.id);
+    setOpenMenuId(null);
+  };
+
+  const handleUnpublish = (convId, e) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to unpublish this conversation from the forum?')) {
+      onUnpublishConversation(convId);
+    }
+    setOpenMenuId(null);
+  };
+
+  const getSyncStatusIcon = (syncStatus) => {
+    switch (syncStatus) {
+      case 'synced':
+        return '☁️'; // Cloud synced
+      case 'syncing':
+        return '⏳'; // Syncing
+      case 'local':
+      default:
+        return '💾'; // Local only
+    }
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h1>LLM Council</h1>
-        <button className="new-conversation-btn" onClick={onNewConversation}>
-          + New Conversation
+        <div className="sidebar-title-row">
+          <h1>LLM Council</h1>
+          <button className="about-icon-btn" onClick={onAbout} title="About LLM Council">
+            ℹ️
+          </button>
+        </div>
+        {currentView === 'private' && (
+          <button className="new-conversation-btn" onClick={onNewConversation}>
+            + New Conversation
+          </button>
+        )}
+      </div>
+
+      {/* Auth section */}
+      <div className="auth-section">
+        {user ? (
+          <div className="user-info">
+            <span className="user-name">{user.name}</span>
+            <button className="logout-btn" onClick={onLogout}>
+              Logout
+            </button>
+          </div>
+        ) : (
+          <button className="login-btn" onClick={onLogin}>
+            Login / Register
+          </button>
+        )}
+      </div>
+
+      {/* View toggle */}
+      <div className="view-toggle">
+        <button
+          className={`view-btn ${currentView === 'private' ? 'active' : ''}`}
+          onClick={() => onViewChange('private')}
+        >
+          My Conversations
+        </button>
+        <button
+          className={`view-btn ${currentView === 'public' ? 'active' : ''}`}
+          onClick={() => onViewChange('public')}
+        >
+          Public Forum
         </button>
       </div>
 
@@ -98,6 +190,11 @@ export default function Sidebar({
                   <>
                     <div className="conversation-info">
                       <div className="conversation-title">
+                        <span className="sync-status-icon" title={`Status: ${conv.sync_status || 'local'}`}>
+                          {getSyncStatusIcon(conv.sync_status)}
+                        </span>
+                        {conv.is_public && <span className="public-badge" title="Public conversation">🌐</span>}
+                        {conv.uses_byok && <span className="byok-badge" title="Uses your API key">🔑</span>}
                         {conv.title || 'New Conversation'}
                         {conv.is_loading && (
                           <span className="loading-indicator">
@@ -111,22 +208,36 @@ export default function Sidebar({
                         {conv.message_count} messages
                       </div>
                     </div>
-                    <button
-                      className="menu-button"
-                      onClick={(e) => handleMenuToggle(conv.id, e)}
-                    >
-                      ⋮
-                    </button>
-                    {openMenuId === conv.id && (
+                    {currentView === 'private' && (
+                      <button
+                        className="menu-button"
+                        onClick={(e) => handleMenuToggle(conv.id, e)}
+                      >
+                        ⋮
+                      </button>
+                    )}
+                    {openMenuId === conv.id && currentView === 'private' && (
                       <div className="conversation-menu">
                         <button onClick={(e) => handleRename(conv, e)}>
                           ✏️ Rename
                         </button>
+                        {conv.is_public ? (
+                          <button onClick={(e) => handleUnpublish(conv.id, e)}>
+                            🔒 Make Private
+                          </button>
+                        ) : (
+                          <button onClick={(e) => handlePublish(conv, e)} disabled={conv.uses_byok}>
+                            🌐 Publish to Forum
+                          </button>
+                        )}
                         <button onClick={(e) => handleExport(conv.id, 'markdown', e)}>
-                          📄 Export to Markdown
+                          📄 Export (Markdown)
                         </button>
-                        <button onClick={(e) => handleExport(conv.id, 'pdf', e)}>
-                          📑 Export to PDF
+                        <button onClick={(e) => handleExport(conv.id, 'html', e)}>
+                          🌐 Export (HTML)
+                        </button>
+                        <button onClick={(e) => handleExport(conv.id, 'json', e)}>
+                          📋 Export (JSON)
                         </button>
                         <button onClick={(e) => handleDelete(conv.id, e)} className="delete-btn">
                           🗑️ Delete

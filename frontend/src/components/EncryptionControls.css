@@ -1,0 +1,111 @@
+.encryption-controls {
+  padding: 16px;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.encryption-status h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.status-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-label {
+  font-weight: 500;
+  color: #666;
+  min-width: 80px;
+}
+
+.status-value {
+  color: #333;
+}
+
+.status-value.encrypted {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.status-value.plaintext {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+.error-message {
+  color: #dc3545;
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.encryption-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.encrypt-button,
+.decrypt-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.encrypt-button {
+  background-color: #28a745;
+  color: white;
+}
+
+.encrypt-button:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.decrypt-button {
+  background-color: #dc3545;
+  color: white;
+}
+
+.decrypt-button:hover:not(:disabled) {
+  background-color: #c82333;
+}
+
+.encrypt-button:disabled,
+.decrypt-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.encryption-info {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #dee2e6;
+}
+
+.info-text {
+  margin: 0;
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}

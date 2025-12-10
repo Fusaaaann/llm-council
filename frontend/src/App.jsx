@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
-import { api } from './api';
+import AuthModal from './components/AuthModal';
+import AboutModal from './components/AboutModal';
+import { api, API_BASE } from './api';
+import { isAuthenticated, getCurrentUser, setAuth, clearAuth, getProfileIdKey } from './auth';
+import { useQueryState } from './queryState.jsx';
+import { createStreamEventHandler, ensureAssistantMessage } from './eventHandler';
+import { SPECIAL_EVENTS } from './stageConfig';
 import './App.css';
 
 function App() {
@@ -11,20 +17,140 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingIntervalId, setLoadingIntervalId] = useState(null);
   const [abortController, setAbortController] = useState(null);
+  const [user, setUser] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+  const [inviteToken, setInviteToken] = useState(null);
+  const [currentView, setCurrentView] = useState('private');
+  const [reconnectionStatus, setReconnectionStatus] = useState(null); // { attempt, maxAttempts, delay }
 
-  // Load conversations on mount
+  // Query state management
+  const queryState = useQueryState();
+
+  // Check for invite token in URL on mount
   useEffect(() => {
-    loadConversations();
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get('invite');
+    if (invite) {
+      setInviteToken(invite);
+      setShowAuthModal(true);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
-  // Poll for conversation loading states
+  // Initialize authentication state
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadConversations();
-    }, 1000); // Poll every second
-
-    return () => clearInterval(interval);
+    if (isAuthenticated()) {
+      setUser(getCurrentUser());
+    }
   }, []);
+
+  // Subscribe to conversation list updates via SSE
+  useEffect(() => {
+    let streamActive = true;
+    const abortController = new AbortController();
+
+    const handleEvent = (eventType, data) => {
+      console.log(`[SSE] Received event: ${eventType}`, data);
+
+      switch (eventType) {
+        case 'initial':
+          // Full conversation list on connection
+          setConversations(data);
+          break;
+
+        case 'conversation_created':
+          // New conversation added
+          setConversations(prev => [...prev, data]);
+          break;
+
+        case 'conversation_updated':
+          // Conversation modified
+          setConversations(prev =>
+            prev.map(conv => conv.id === data.id ? data : conv)
+          );
+          // If current conversation was updated, refresh it
+          if (currentConversationId === data.id) {
+            loadConversation(data.id);
+          }
+          break;
+
+        case 'conversation_deleted':
+          // Conversation removed
+          setConversations(prev =>
+            prev.filter(conv => conv.id !== data.id)
+          );
+          // If current conversation was deleted, clear selection
+          if (currentConversationId === data.id) {
+            setCurrentConversationId(null);
+            setCurrentConversation(null);
+          }
+          break;
+
+        case 'heartbeat':
+          // Keep-alive - no action needed
+          break;
+
+        case 'error':
+          console.error('[SSE] Error:', data.message);
+          // Fallback to polling on error
+          loadConversations();
+          break;
+
+        default:
+          console.warn('[SSE] Unknown event type:', eventType);
+      }
+    };
+
+    const startStream = async () => {
+      try {
+        console.log('[SSE] Starting conversation updates stream');
+        await api.subscribeToConversationUpdates(
+          handleEvent,
+          currentView,
+          abortController.signal
+        );
+
+        // Stream ended naturally, reconnect if still active
+        if (streamActive) {
+          console.log('[SSE] Stream ended, reconnecting in 1s...');
+          setTimeout(startStream, 1000);
+        }
+      } catch (error) {
+        if (abortController.signal.aborted) {
+          console.log('[SSE] Stream aborted by cleanup');
+          return;
+        }
+
+        console.error('[SSE] Failed to subscribe:', error);
+
+        // Check if error is authentication-related (401 after refresh attempt)
+        if (error.message && error.message.includes('Authentication expired')) {
+          console.log('[App] Authentication expired in SSE subscription, logging out');
+          handleLogout();
+          return;
+        }
+
+        // Fallback to initial load
+        loadConversations();
+
+        // Retry connection if still active
+        if (streamActive) {
+          console.log('[SSE] Retrying connection in 5s...');
+          setTimeout(startStream, 5000);
+        }
+      }
+    };
+
+    startStream();
+
+    return () => {
+      console.log('[SSE] Unsubscribing from conversation updates');
+      streamActive = false;
+      abortController.abort();
+    };
+  }, [currentView, currentConversationId]);
 
   // Load conversation details when selected
   useEffect(() => {
@@ -35,16 +161,32 @@ function App() {
 
   const loadConversations = async () => {
     try {
-      const convs = await api.listConversations();
+      const convs = await api.listConversations(currentView);
       setConversations(convs);
     } catch (error) {
       console.error('Failed to load conversations:', error);
+
+      // Check if error is authentication-related (401 after refresh attempt)
+      if (error.message && error.message.includes('Authentication expired')) {
+        console.log('[App] Authentication expired while loading conversations, logging out');
+        handleLogout();
+      }
     }
+  };
+
+  const handleViewChange = (view) => {
+    setCurrentView(view);
+    // Clear current conversation when switching views
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   const loadConversation = async (id) => {
     try {
-      const conv = await api.getConversation(id);
+      // Use different endpoint based on view
+      const conv = currentView === 'public'
+        ? await api.getForumConversation(id)
+        : await api.getConversation(id);
       setCurrentConversation(conv);
     } catch (error) {
       console.error('Failed to load conversation:', error);
@@ -99,25 +241,105 @@ function App() {
       await api.exportConversation(id, format);
     } catch (error) {
       console.error('Failed to export conversation:', error);
-      alert('Export to PDF is not yet implemented. Please use Markdown export.');
+
+      // Show appropriate error message based on format
+      if (format === 'pdf') {
+        alert('Export to PDF is not yet implemented. Please use Markdown export.');
+      } else {
+        // Show actual error for markdown export failures
+        const errorMessage = error.message || 'Unknown error occurred';
+        alert(`Failed to export conversation to ${format}: ${errorMessage}`);
+      }
     }
+  };
+
+  const handlePublishConversation = async (id) => {
+    try {
+      await api.publishConversation(id);
+      await loadConversations();
+      if (currentConversationId === id) {
+        await loadConversation(id);
+      }
+    } catch (error) {
+      console.error('Failed to publish conversation:', error);
+      alert('Failed to publish conversation. Please try again.');
+    }
+  };
+
+  const handleUnpublishConversation = async (id) => {
+    try {
+      await api.unpublishConversation(id);
+      await loadConversations();
+      if (currentConversationId === id) {
+        await loadConversation(id);
+      }
+    } catch (error) {
+      console.error('Failed to unpublish conversation:', error);
+      alert('Failed to unpublish conversation. Please try again.');
+    }
+  };
+
+  const handleAuth = async (mode, credentials) => {
+    try {
+      console.log('[APP] handleAuth called, mode:', mode);
+      let result;
+      if (mode === 'register') {
+        result = await api.register(
+          credentials.email,
+          credentials.password,
+          credentials.name,
+          credentials.invite_token
+        );
+      } else {
+        result = await api.login(credentials.email, credentials.password);
+      }
+
+      console.log('[APP] Auth API call successful, result:', {
+        hasAccessToken: !!result.access_token,
+        hasRefreshToken: !!result.refresh_token,
+        user: result.user
+      });
+
+      // Store auth data
+      console.log('[APP] Calling setAuth with tokens...');
+      setAuth(result.access_token, result.refresh_token, result.user);
+      console.log('[APP] Setting user state...');
+      setUser(result.user);
+      setShowAuthModal(false);
+      setInviteToken(null); // Clear invite token after use
+
+      console.log('[APP] Auth complete, reloading conversations...');
+      // Reload conversations for the authenticated user
+      await loadConversations();
+    } catch (error) {
+      console.error('[APP] handleAuth error:', error);
+      throw error; // Re-throw to be handled by AuthModal
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+
+    clearAuth();
+    setUser(null);
+    setConversations([]);
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   const handleUpdateModels = async (councilModels, chairmanModel) => {
     try {
-      const response = await fetch('http://localhost:8001/api/models', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          council_models: councilModels,
-          chairman_model: chairmanModel,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error('Failed to update models');
+      // Update conversation models if it's a new conversation (no messages yet)
+      if (currentConversationId && (!currentConversation?.messages || currentConversation.messages.length === 0)) {
+        await api.updateConversationModels(currentConversationId, councilModels, chairmanModel);
+        // Reload conversation to reflect changes
+        await loadConversation(currentConversationId);
       }
+      // For existing conversations with messages, models are read-only (enforced by ModelConfig UI)
     } catch (error) {
       console.error('Failed to update models:', error);
       throw error;
@@ -143,7 +365,8 @@ function App() {
   const handleRetryMessage = async (content) => {
     if (!currentConversationId || isLoading) return;
 
-    // Remove the last assistant response (if any)
+    // Remove the assistant response (completed or incomplete)
+    // The backend will also remove it and create a fresh one
     setCurrentConversation((prev) => {
       const messages = [...prev.messages];
       if (messages[messages.length - 1]?.role === 'assistant') {
@@ -160,6 +383,10 @@ function App() {
     if (abortController) {
       abortController.abort();
       setAbortController(null);
+    }
+    // Cancel query state
+    if (currentConversationId) {
+      queryState.cancelQuery(currentConversationId);
     }
     setIsLoading(false);
     // Remove the partial assistant response
@@ -180,6 +407,10 @@ function App() {
     setAbortController(controller);
 
     setIsLoading(true);
+
+    // Start query state tracking
+    queryState.startQuery(currentConversationId);
+
     try {
       // Optimistically add user message to UI (unless retrying)
       if (!skipAddingUserMessage) {
@@ -191,153 +422,158 @@ function App() {
       }
 
       // Create a partial assistant message that will be updated progressively
-      const assistantMessage = {
-        role: 'assistant',
-        stage1: null,
-        stage1_5: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        loading: {
-          stage1: false,
-          stage1_5: false,
-          stage2: false,
-          stage3: false,
+      // (unless retrying, in which case we already removed the old one and will create fresh)
+      if (!skipAddingUserMessage) {
+        const assistantMessage = {
+          role: 'assistant',
+          stage1: null,
+          stage1_5: null,
+          stage2: null,
+          stage3: null,
+          metadata: null,
+        };
+
+        // Add the partial assistant message
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [...(prev?.messages || []), assistantMessage],
+        }));
+      }
+      // If retrying (skipAddingUserMessage=true), don't create assistant message yet
+      // Backend will create it via save_partial_assistant_message() and we'll get it via events
+
+      // Create dynamic event handler
+      const streamEventHandler = createStreamEventHandler({
+        updateQueryState: queryState.updateStageStatus,
+        setConversation: setCurrentConversation
+      });
+
+      // Send message with streaming and reconnection handler
+      await api.sendMessageStream(
+        currentConversationId,
+        content,
+        controller.signal,
+        (eventType, event) => {
+          // Try dynamic handler first (handles all stage events)
+          const handled = streamEventHandler(eventType, event, currentConversationId);
+
+          if (handled) {
+            // Special handling for stage1_start to ensure assistant message exists
+            if (eventType === 'stage1_start') {
+              ensureAssistantMessage(setCurrentConversation);
+            }
+            // Special handling for stage3_complete to clear loading state early
+            else if (eventType === 'stage3_complete') {
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          // Handle special events that dynamic handler doesn't manage
+          switch (eventType) {
+            case SPECIAL_EVENTS.TITLE_COMPLETE:
+              // Optimistically update the title in local state
+              if (event.data && event.data.title) {
+                const newTitle = event.data.title;
+
+                // Update conversations list
+                setConversations((prev) =>
+                  prev.map((conv) =>
+                    conv.id === currentConversationId
+                      ? { ...conv, title: newTitle }
+                      : conv
+                  )
+                );
+
+                // Update current conversation if it matches
+                setCurrentConversation((prev) =>
+                  prev && prev.id === currentConversationId
+                    ? { ...prev, title: newTitle }
+                    : prev
+                );
+              }
+
+              // Still reload to ensure eventual convergence
+              loadConversations();
+              break;
+
+            case SPECIAL_EVENTS.COMPLETE:
+              // Stream complete, mark query as complete
+              queryState.completeQuery(currentConversationId);
+              loadConversations();
+              setIsLoading(false);
+              setAbortController(null);
+              break;
+
+            case SPECIAL_EVENTS.ERROR:
+              console.error('Stream error:', event.message);
+              queryState.cancelQuery(currentConversationId);
+              setIsLoading(false);
+              setAbortController(null);
+              break;
+
+            case SPECIAL_EVENTS.HEARTBEAT:
+              // Keepalive event, no action needed
+              console.log('[Stream] Heartbeat received at', new Date(event.timestamp * 1000));
+              break;
+
+            case SPECIAL_EVENTS.RECONNECTED:
+              // Stream resumed after network interruption
+              console.log('[Stream] Reconnected! Resumed from stage:', event.last_stage);
+              setReconnectionStatus(null); // Clear reconnection status
+              // Continue processing remaining stages normally
+              break;
+
+            case SPECIAL_EVENTS.AUTH_EXPIRED:
+              // Token expired or user logged out elsewhere during stream
+              console.log('[Stream] Auth expired:', event.reason);
+              setIsLoading(false);
+              setAbortController(null);
+              setReconnectionStatus(null);
+
+              if (event.reason === 'logged_out') {
+                // User logged out elsewhere
+                alert(event.message || 'Session ended. Please log in again.');
+                handleLogout();
+              } else {
+                // Token expired - try to refresh
+                console.log('[Stream] Attempting to refresh token...');
+                api.refreshAccessToken()
+                  .then(refreshed => {
+                    if (refreshed) {
+                      console.log('[Stream] Token refreshed, stream can be retried');
+                      // Note: User can manually retry with the retry button
+                    } else {
+                      console.log('[Stream] Token refresh failed, logging out');
+                      alert('Session expired. Please log in again.');
+                      handleLogout();
+                    }
+                  })
+                  .catch(err => {
+                    console.error('[Stream] Token refresh error:', err);
+                    alert('Session expired. Please log in again.');
+                    handleLogout();
+                  });
+              }
+              break;
+
+            default:
+              console.log('Unknown event type:', eventType);
+          }
         },
-      };
-
-      // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...(prev?.messages || []), assistantMessage],
-      }));
-
-      // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, controller.signal, (eventType, event) => {
-        switch (eventType) {
-          case 'stage1_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_5_questions_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1_5 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_5_questions_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              // Store questions, but keep loading indicator
-              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
-              lastMsg.stage1_5.questions = event.data;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_5_answers_start':
-            // Keep loading indicator
-            break;
-
-          case 'stage1_5_answers_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              // Add answers and complete stage1_5
-              if (!lastMsg.stage1_5) lastMsg.stage1_5 = {};
-              lastMsg.stage1_5.answers = event.data;
-              lastMsg.stage1_5.label_to_model = event.label_to_model;
-              lastMsg.loading.stage1_5 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage2_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage2_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage3_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage3_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
-              lastMsg.loading.stage3 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'title_complete':
-            // Reload conversations to get updated title
-            loadConversations();
-            break;
-
-          case 'complete':
-            // Stream complete, reload conversations list
-            loadConversations();
-            setIsLoading(false);
-            setAbortController(null);
-            break;
-
-          case 'error':
-            console.error('Stream error:', event.message);
-            setIsLoading(false);
-            setAbortController(null);
-            break;
-
-          default:
-            console.log('Unknown event type:', eventType);
-        }
+      // Reconnection callback
+      (attempt, maxAttempts, delay) => {
+        console.log(`[Stream] Reconnection attempt ${attempt}/${maxAttempts} in ${delay}ms`);
+        setReconnectionStatus({ attempt, maxAttempts, delay: Math.round(delay / 1000) });
       });
     } catch (error) {
       // Check if it was aborted
       if (error.name === 'AbortError') {
         console.log('Message sending cancelled');
+        queryState.cancelQuery(currentConversationId);
       } else {
         console.error('Failed to send message:', error);
+        queryState.cancelQuery(currentConversationId);
         // Remove optimistic messages on error
         setCurrentConversation((prev) => ({
           ...prev,
@@ -346,6 +582,7 @@ function App() {
       }
       setIsLoading(false);
       setAbortController(null);
+      setReconnectionStatus(null); // Clear reconnection status on error
     }
   };
 
@@ -359,15 +596,58 @@ function App() {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onExportConversation={handleExportConversation}
+        onPublishConversation={handlePublishConversation}
+        onUnpublishConversation={handleUnpublishConversation}
+        user={user}
+        onLogin={() => setShowAuthModal(true)}
+        onLogout={handleLogout}
+        onAbout={() => setShowAboutModal(true)}
+        currentView={currentView}
+        onViewChange={handleViewChange}
       />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        onEditMessage={handleEditMessage}
-        onRetryMessage={handleRetryMessage}
-        onCancelMessage={handleCancelMessage}
-        onUpdateModels={handleUpdateModels}
-        isLoading={isLoading}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {reconnectionStatus && (
+          <div
+            style={{
+              backgroundColor: '#ff9800',
+              color: 'white',
+              padding: '10px 20px',
+              textAlign: 'center',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+              zIndex: 1000,
+            }}
+          >
+            ⚠️ Connection lost. Reconnecting in {reconnectionStatus.delay}s... (Attempt {reconnectionStatus.attempt}/{reconnectionStatus.maxAttempts})
+          </div>
+        )}
+        <ChatInterface
+          conversation={currentConversation}
+          onSendMessage={handleSendMessage}
+          onEditMessage={handleEditMessage}
+          onRetryMessage={handleRetryMessage}
+          onCancelMessage={handleCancelMessage}
+          onUpdateModels={handleUpdateModels}
+          isLoading={isLoading}
+          queryState={currentConversationId ? queryState.getQueryState(currentConversationId) : null}
+          isReadOnly={
+            // Read-only if: viewing public forum AND conversation doesn't belong to current user
+            currentView === 'public' &&
+            currentConversation &&
+            currentConversation.profile_id !== localStorage.getItem(getProfileIdKey())
+          }
+        />
+      </div>
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={handleAuth}
+        inviteToken={inviteToken}
+      />
+      <AboutModal
+        isOpen={showAboutModal}
+        onClose={() => setShowAboutModal(false)}
       />
     </div>
   );

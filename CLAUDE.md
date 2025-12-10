@@ -1,240 +1,297 @@
 # CLAUDE.md - Technical Notes for LLM Council
 
-This file contains technical details, architectural decisions, and important implementation notes for future development sessions.
+This file contains essential overview and architectural decisions for the LLM Council project. Detailed implementation documentation is in [ai_notes/](ai_notes/).
 
 ## Project Overview
 
-LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
+LLM Council is a **3.5-stage deliberation system** where multiple LLMs collaboratively answer user questions through initial responses, cross-interrogation, peer review, and final synthesis.
 
-**Key Features:**
-- **Streaming responses**: Progressive display of each stage as it completes via Server-Sent Events
-- **Metadata persistence**: label_to_model and aggregate_rankings now saved with messages
-- **Edit/Retry actions**: Users can edit or retry their last message
-- **Multi-turn conversations**: Input field always visible for continued dialogue
+### Key Innovations
+- **Stage 1.5 Cross-Interrogation**: Models question each other's responses to uncover deeper insights
+- **Anonymized Peer Review**: Stage 2 uses anonymous labels (Response A, B, C) to prevent bias
+- **Configuration-Driven Architecture**: Dynamic event handling eliminates hardcoded logic
 
-## Architecture
+### Core Features
+- **Streaming responses**: Progressive display via Server-Sent Events (SSE)
+- **Network resilience**: Automatic reconnection with stream resumption
+- **Real-time updates**: SSE streaming for sidebar with automatic updates
+- **Authentication**: JWT-based with refresh token rotation and account lockout
+- **Encryption at rest**: Messages encrypted with Fernet (AES-128-CBC)
+- **Multi-tenancy**: Profile-based conversation organization
+- **Public/Private**: Publish conversations to forum or keep private
 
-### Backend Structure (`backend/`)
+## Architecture Overview
 
-**`config.py`**
-- Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
-- Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
-- Uses environment variable `OPENROUTER_API_KEY` from `.env`
-- Backend runs on **port 8001** (NOT 8000 - user had another app on 8000)
+### Backend (FastAPI)
+**Route-based modular architecture** with FastAPI routers. See [Backend Architecture](ai_notes/BACKEND_ARCHITECTURE.md).
 
-**`openrouter.py`**
-- `query_model()`: Single async model query
-- `query_models_parallel()`: Parallel queries using `asyncio.gather()`
-- Returns dict with 'content' and optional 'reasoning_details'
-- Graceful degradation: returns None on failure, continues with successful responses
+**Key Modules:**
+- `routes/` - Organized by feature (auth, conversations, forum, profiles)
+- `council.py` - Core deliberation logic (4 stages)
+- `storage.py` - JSON storage with encryption support
+- `encryption.py` - Fernet provider for message encryption
+- `auth.py` - JWT tokens, refresh rotation, session management
 
-**`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models
-- `stage2_collect_rankings()`:
-  - Anonymizes responses as "Response A, B, C, etc."
-  - Creates `label_to_model` mapping for de-anonymization
-  - Prompts models to evaluate and rank (with strict format requirements)
-  - Returns tuple: (rankings_list, label_to_model_dict)
-  - Each ranking includes both raw text and `parsed_ranking` list
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings
-- `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
-- `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
+**API Structure:**
+- **Authentication**: 7 routes (register, login, refresh, logout, etc.)
+- **Conversations**: 14 routes (CRUD, streaming, export, encryption, publish)
+- **Forum**: 2 routes (list public, get public)
+- **Profiles**: 5 routes (CRUD)
+- **Models**: 2 routes (get/update runtime config)
 
-**`storage.py`**
-- JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, title, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3, metadata}`
-- **UPDATED**: metadata (label_to_model, aggregate_rankings) is NOW persisted to storage for full conversation history
+### Frontend (React)
+**Configuration-driven event handling** eliminates hardcoded switch statements. See [Frontend Architecture](ai_notes/FRONTEND_ARCHITECTURE.md).
 
-**`main.py`**
-- FastAPI app with CORS enabled for localhost:5173 and localhost:3000
-- **Endpoints:**
-  - POST `/api/conversations/{id}/message` - Batch response with all stages + metadata
-  - POST `/api/conversations/{id}/message/stream` - Server-Sent Events streaming (PREFERRED)
-- Streaming endpoint sends events: stage1_start, stage1_complete, stage2_start, stage2_complete, stage3_start, stage3_complete, title_complete, complete, error
-- Title generation runs in parallel with Stage 1 to minimize perceived latency
-- Metadata includes: label_to_model mapping and aggregate_rankings
+**Key Components:**
+- `App.jsx` - Main orchestration, SSE subscriptions
+- `stageConfig.js` - Centralized stage definitions
+- `eventHandler.js` - Dynamic event handler factory
+- `ChatInterface.jsx` - Input, stages, actions (edit/retry/cancel)
+- `Sidebar.jsx` - Conversation list with real-time updates
 
-### Frontend Structure (`frontend/src/`)
+**Stage Components:**
+- `Stage1.jsx` - Initial responses (tabs)
+- `Stage1_5.jsx` - Cross-interrogation Q&A (collapsible sections)
+- `Stage2.jsx` - Peer review rankings (tabs)
+- `Stage3.jsx` - Final synthesis (green highlight)
 
-**`App.jsx`**
-- Main orchestration: manages conversations list and current conversation
-- Handles message sending via streaming API (`sendMessageStream`)
-- **New handlers:**
-  - `handleEditMessage()`: Removes last user message + assistant response, populates input field
-  - `handleRetryMessage()`: Removes last assistant response, resends user message
-- Metadata now persisted in backend and reloaded from storage
-- Progressive UI updates: each stage updates in real-time as events arrive
+## Detailed Documentation
 
-**`components/ChatInterface.jsx`**
-- **UPDATED**: Input field always visible (not just for first message)
-- Multiline textarea (3 rows, resizable) with ref for programmatic focus
-- Enter to send, Shift+Enter for new line
-- User messages wrapped in markdown-content class for padding
-- **New features:**
-  - Edit/Retry buttons on last user message (when not loading)
-  - Edit button populates input field and focuses it
-  - Progressive loading indicators for each stage during streaming
+### Core Systems
+- [Backend Architecture](ai_notes/BACKEND_ARCHITECTURE.md) - Route modules, core logic, deployment
+- [Frontend Architecture](ai_notes/FRONTEND_ARCHITECTURE.md) - Components, state management, UI
+- [Storage Architecture](ai_notes/STORAGE_ARCHITECTURE.md) - JSON storage, encryption, multi-tenancy
+- [Authentication](ai_notes/AUTHENTICATION.md) - JWT, refresh rotation, security features
+- [Event Handling](ai_notes/EVENT_HANDLING.md) - Configuration-driven system
 
-**`components/Stage1.jsx`**
-- Tab view of individual model responses
-- ReactMarkdown rendering with markdown-content wrapper
+### Features
+- [Stage 1.5 Implementation](ai_notes/STAGE_1_5_IMPLEMENTATION.md) - Cross-interrogation details
+- [SSE Network Resilience](ai_notes/SSE_NETWORK_RESILIENCE.md) - Stream resumption, reconnection
+- [Streaming Token Fix](ai_notes/STREAMING_TOKEN_FIX.md) - Mid-stream token expiry solution
+- [Session Revocation on Shutdown](ai_notes/SESSION_REVOCATION_ON_SHUTDOWN.md) - Auto cleanup
 
-**`components/Stage2.jsx`**
-- **Critical Feature**: Tab view showing RAW evaluation text from each model
-- De-anonymization happens CLIENT-SIDE for display (models receive anonymous labels)
-- Shows "Extracted Ranking" below each evaluation so users can validate parsing
-- Aggregate rankings shown with average position and vote count
-- Explanatory text clarifies that boldface model names are for readability only
+### Security
+- [Security Implementation](ai_notes/SECURITY_IMPLEMENTATION.md) - Full security hardening
+- [Security Migration Guide](ai_notes/SECURITY_MIGRATION_GUIDE.md) - Upgrade instructions
+- [Encryption Guide](ai_notes/ENCRYPTION_GUIDE.md) - Encryption system details
+- [Encryption API](ai_notes/ENCRYPTION_API.md) - API documentation
 
-**`components/Stage3.jsx`**
-- Final synthesized answer from chairman
-- Green-tinted background (#f0fff0) to highlight conclusion
-
-**Styling (`*.css`)**
-- Light mode theme (not dark mode)
-- Primary color: #4a90e2 (blue)
-- Global markdown styling in `index.css` with `.markdown-content` class
-- 12px padding on all markdown content to prevent cluttered appearance
-
-## Key Design Decisions
-
-### Stage 2 Prompt Format
-The Stage 2 prompt is very specific to ensure parseable output:
-```
-1. Evaluate each response individually first
-2. Provide "FINAL RANKING:" header
-3. Numbered list format: "1. Response C", "2. Response A", etc.
-4. No additional text after ranking section
-```
-
-This strict format allows reliable parsing while still getting thoughtful evaluations.
-
-### De-anonymization Strategy
-- Models receive: "Response A", "Response B", etc.
-- Backend creates mapping: `{"Response A": "openai/gpt-5.1", ...}`
-- Frontend displays model names in **bold** for readability
-- Users see explanation that original evaluation used anonymous labels
-- This prevents bias while maintaining transparency
-
-### Error Handling Philosophy
-- Continue with successful responses if some models fail (graceful degradation)
-- Never fail the entire request due to single model failure
-- Log errors but don't expose to user unless all models fail
-
-### UI/UX Transparency
-- All raw outputs are inspectable via tabs
-- Parsed rankings shown below raw text for validation
-- Users can verify system's interpretation of model outputs
-- This builds trust and allows debugging of edge cases
-
-## Important Implementation Details
-
-### Relative Imports
-All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
-
-### Port Configuration
-- Backend: 8001 (changed from 8000 to avoid conflict)
-- Frontend: 5173 (Vite default)
-- Update both `backend/main.py` and `frontend/src/api.js` if changing
-
-### Markdown Rendering
-All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
-
-### Model Configuration
-Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
-
-## Common Gotchas
-
-1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
-2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
-3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Metadata Persistence**: ~~Metadata is ephemeral (not persisted)~~ **FIXED** - Metadata now persisted in storage.py
-5. **Streaming Connection**: EventSource connections can timeout; frontend handles reconnection via error events
-
-## Recent Updates (Latest Session)
-
-### Streaming Implementation
-- Added `/api/conversations/{id}/message/stream` endpoint with Server-Sent Events
-- Frontend now uses streaming by default for real-time stage updates
-- Title generation parallelized with Stage 1 to reduce perceived latency
-
-### Metadata Persistence
-- Modified `storage.py` to accept optional metadata parameter in `add_assistant_message()`
-- Backend now saves label_to_model and aggregate_rankings with each message
-- Metadata survives page reloads and conversation switching
-
-### Edit/Retry UI
-- Added Edit and Retry buttons to last user message
-- Edit functionality: removes messages, populates input field, focuses textarea
-- Retry functionality: removes assistant response, resends query
-- Buttons only show when not loading and on the last user message
-
-### Multi-turn Support
-- Input field now always visible (not just for first message)
-- Conversations can continue indefinitely with full context
-- Each turn includes all previous messages for continuity
-
-## Future Enhancement Ideas
-
-- Configurable council/chairman via UI instead of config file
-- ~~Streaming responses instead of batch loading~~ **DONE** ✓
-- ~~Export conversations to markdown/PDF~~
-- Model performance analytics over time
-- Custom ranking criteria (not just accuracy/insight)
-- Support for reasoning models (o1, etc.) with special handling
-- ~~Manual rename, Delete conversation functionality~~
-- ~~Stop/cancel ongoing council deliberation~~
-- navigate between user messages
-
-## Testing Notes
-
-Use `test_openrouter.py` to verify API connectivity and test different model identifiers before adding to council. The script tests both streaming and non-streaming modes.
+### Other
+- [Session Management](ai_notes/SESSION_MANAGEMENT.md) - Session handling details
+- [Quick Start Auth](ai_notes/QUICK_START_AUTH.md) - Quick auth setup guide
 
 ## Data Flow Summary
 
-### Streaming Flow (Current Implementation)
+### Streaming Flow
 ```
 User Query → POST /api/conversations/{id}/message/stream
     ↓
-[Event: stage1_start] → UI shows "Stage 1 Loading..."
+[Proactive token refresh if < 5 min until expiry]
     ↓
-Stage 1: Parallel queries → [individual responses]
+[Event: stream_init] → Connection token generated
     ↓
-[Event: stage1_complete] → UI displays tabs with responses
+[Event: stage1_start] → Stage 1: Parallel queries → [Event: stage1_complete]
     ↓
-[Event: stage2_start] → UI shows "Stage 2 Loading..."
+[Event: stage1_5_questions_start] → Models ask questions → [Event: stage1_5_questions_complete]
     ↓
-Stage 2: Anonymize → Parallel ranking queries → [evaluations + rankings]
+[Event: stage1_5_answers_start] → Models answer → [Event: stage1_5_answers_complete]
     ↓
-Calculate aggregate rankings → metadata assembled
+[Heartbeat: validate session]
     ↓
-[Event: stage2_complete + metadata] → UI displays rankings
+[Event: stage2_start] → Anonymized rankings → [Event: stage2_complete + metadata]
     ↓
-[Event: stage3_start] → UI shows "Stage 3 Loading..."
+[Heartbeat: validate session]
     ↓
-Stage 3: Chairman synthesis with full context
+[Event: stage3_start] → Chairman synthesis → [Event: stage3_complete]
     ↓
-[Event: stage3_complete] → UI displays final answer
+[Event: title_complete] (parallel, first message only)
     ↓
-[Event: title_complete] (first message only) → Sidebar updates
-    ↓
-[Event: complete] → Save to storage with metadata → Done
+[Event: complete] → Done
 ```
 
-### Storage Flow
+**Notes:**
+- Title generation runs in parallel with Stage 1
+- Partial state saved after each stage (resilience)
+- Heartbeats every 60s with session validation
+- Connection tokens validate stream ownership (2hr expiry)
+
+### Storage Structure
 ```
 In-memory State (during stream)
     ↓
-storage.add_assistant_message(stage1, stage2, stage3, metadata)
+storage.save_partial_assistant_message() after each stage
     ↓
-JSON file: data/conversations/{id}.json
-    ↓
+JSON file: data/conversations/profile_<id>/<conversation_id>.json
+```
+
+**Unencrypted:**
+```json
 {
-  messages: [
-    {role: "assistant", stage1: [...], stage2: [...], stage3: {...}, metadata: {...}}
+  "id": "...",
+  "profile_id": "...",
+  "title": "...",
+  "messages": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "stage1": [...], "stage1_5": {...}, "stage2": [...], "stage3": {...}, "metadata": {...}}
   ]
 }
 ```
 
-The entire flow is async/parallel where possible to minimize latency. Title generation runs concurrently with Stage 1.
+**Encrypted:**
+```json
+{
+  "_encryption": {"version": "1.0", "provider": "fernet"},
+  "messages_encrypted": "<base64-ciphertext>",
+  "id": "...",
+  "title": "...",
+  ... (all other metadata unencrypted)
+}
+```
+
+## Key Design Decisions
+
+### Configuration-Driven Event Handling
+**Problem:** 200-line switch statement with hardcoded stage names in `App.jsx`.
+
+**Solution:**
+- Centralized stage config ([stageConfig.js](frontend/src/stageConfig.js), [stage_config.py](backend/stage_config.py))
+- Dynamic event handler factory ([eventHandler.js](frontend/src/eventHandler.js))
+- 75% code reduction (200 → 50 lines)
+
+**Benefits:** Easy to add stages (3 lines config), type-safe, maintainable.
+
+See [Event Handling Architecture](ai_notes/EVENT_HANDLING.md) for details.
+
+### Backend-First Storage
+**Current:** All conversations stored on backend (`data/conversations/profile_<id>/`), REST API.
+
+**Alternative:** Local-first storage modules available but not integrated (`frontend/src/storage/`).
+
+See [Storage Architecture](ai_notes/STORAGE_ARCHITECTURE.md) for details.
+
+### Encrypted Storage
+**What's encrypted:** Only `messages[]` array (user/assistant content)
+
+**What's NOT encrypted:** All metadata (id, title, timestamps, is_public, etc.)
+
+**Rationale:** Metadata must be searchable/indexable without decryption.
+
+**Provider:** Fernet (AES-128-CBC) symmetric encryption, future-proof for RSA/hybrid.
+
+See [Storage Architecture](ai_notes/STORAGE_ARCHITECTURE.md#encryption-encryptionpy) for details.
+
+### Stage 2 Anonymization
+**Why:** Prevents models from playing favorites based on brand recognition.
+
+**How:**
+- Models receive "Response A, B, C, etc." (anonymous)
+- Backend creates mapping: `{"Response A": "openai/gpt-5.1", ...}`
+- Frontend displays model names in **bold** for readability
+
+**Transparency:** Users see explanation that original evaluation used anonymous labels.
+
+### Progressive Message Building
+**Pattern:** Assistant messages built incrementally during streaming.
+
+**Benefits:**
+- Resilient to crashes (partial data preserved)
+- Enables stream resumption from checkpoint
+- No lost work on network drops
+
+See [Backend Architecture](ai_notes/BACKEND_ARCHITECTURE.md#progressive-message-building) for details.
+
+## Important Implementation Details
+
+### Relative Imports
+All backend modules use relative imports (`from .config import ...`) not absolute. Critical for `python -m backend.main` to work.
+
+### Port Configuration
+- Backend: **8003** (changed to avoid conflicts)
+- Frontend: 5173 (Vite default)
+
+### Deployment
+See [Backend Architecture](ai_notes/BACKEND_ARCHITECTURE.md#deployment) for environment variables and steps.
+
+### Markdown Rendering
+All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing.
+
+## Common Gotchas
+
+1. **Module Import Errors**: Run backend as `python -m backend.main` from project root
+2. **CORS Issues**: Configure `FRONTEND_URLS` environment variable
+3. **API URL Configuration**: Set `VITE_API_BASE_URL` before frontend build
+4. **Encryption Key Loss**: Lost `ENCRYPTION_KEY` = permanently lost conversations. ALWAYS back up `.env`
+5. **Missing cryptography Package**: Install via `pip install cryptography`
+6. **Model Identifiers**: Verify model IDs exist in OpenRouter before deployment
+
+## Recent Updates
+
+See [Changelog](ai_notes/CHANGELOG.md) for detailed update history.
+
+**Latest (2025-12-02):**
+- 🔄 **Token Refresh Race Condition Fix** - Module-level lock prevents duplicate refresh attempts
+- ⚡ **Configuration-Driven Event Handling** - 75% code reduction (200 → 50 lines)
+
+**2025-11-29:**
+- 🔐 **Session Revocation on Shutdown** - Auto-revoke all sessions for security
+- 🌐 **SSE Network Resilience** - Automatic reconnection with stream resumption
+- 🔀 **Backend Route Refactoring** - Modular route-based architecture
+- 🔧 **Streaming Token Expiry Fix** - Proactive token refresh
+
+**2025-11-26:**
+- 🔒 **Security Hardening** - Encrypted data, rate limiting, audit logging
+- **Waitlist & Invite System** - Production-ready registration
+- **Encrypted Storage** - Fernet encryption for messages at rest
+
+**2025-11-24:**
+- 🔄 **Stage 1.5 Cross-Interrogation** - Models question each other's responses
+
+**Earlier:**
+- Streaming Implementation, Metadata Persistence, Edit/Retry UI, Multi-turn Support
+
+## Future Enhancement Ideas
+
+- Configurable council/chairman via UI (currently session-scoped via API)
+- ~~Streaming responses~~ **DONE** ✓
+- ~~Export to markdown~~ **DONE** ✓
+- ~~Real-time updates~~ **DONE** ✓
+- ~~Network resilience~~ **DONE** ✓
+- Model performance analytics
+- Custom ranking criteria
+- Reasoning model support (o1, etc.)
+- ~~Rename/Delete~~ **DONE** ✓
+- ~~Stop/cancel~~ **DONE** ✓
+- Message pagination
+- PDF export
+- Integration tests
+- Email notifications
+
+## Testing Notes
+
+Use `test_openrouter.py` to verify API connectivity and model identifiers before deployment.
+
+## Documentation Maintenance
+
+This CLAUDE.md file provides **essential overview** of the LLM Council project. Detailed implementation documentation is in [ai_notes/](ai_notes/).
+
+**When to Update:**
+- After major architectural changes
+- When adding/removing API endpoints
+- After implementing features from "Future Enhancement Ideas"
+- When changing data structures
+
+**What to Document Here:**
+- High-level architecture overview
+- Key design decisions and rationale
+- Links to detailed documentation
+- Recent updates with session dates
+
+**Detailed Documentation:**
+Store implementation details in [ai_notes/](ai_notes/) with descriptive filenames.
+
+**Related Documentation:**
+- [ai_notes/](ai_notes/) - Detailed technical documentation
+- [frontend/src/storage/README.md](frontend/src/storage/README.md) - Local-first storage guide
+- `.env.example` - Configuration documentation
+
+**Last Major Update:** 2025-12-02 (Configuration-Driven Event Handling, Token Refresh Fix)
