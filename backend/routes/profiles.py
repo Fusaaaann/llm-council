@@ -5,7 +5,7 @@ import uuid
 
 import backend.storage.profiles
 
-from ..models import CreateProfileRequest, UpdateProfileRequest
+from backend.models import CreateProfileRequest, UpdateProfileRequest
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 

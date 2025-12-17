@@ -32,6 +32,7 @@ export function mapWizardStateToWorkflow(wizardState) {
     outputFormat,
     qualities,
     constraints,
+    globalModels,
 
     // Step 3: Perspectives
     perspectives,
@@ -41,7 +42,10 @@ export function mapWizardStateToWorkflow(wizardState) {
     decisionMaker,
     visibilityMode,
 
-    // Step 5: Operational
+    // Step 5: Follow-up steps
+    followUpSteps,
+
+    // Step 6: Operational
     globalTimeout,
     filters,
     costControls
@@ -83,7 +87,31 @@ export function mapWizardStateToWorkflow(wizardState) {
       workflow = buildIndependentSynthesisWorkflow(workflow, wizardState);
   }
 
-  return workflow.build();
+  // Add follow-up steps if configured
+  if (followUpSteps && followUpSteps.length > 0) {
+    workflow = buildFollowUpSteps(workflow, wizardState);
+  }
+
+  // Build the workflow
+  const workflowDef = workflow.build();
+
+  // Add global models array (extract all referenced models)
+  const referencedModels = extractReferencedModels(wizardState);
+  if (referencedModels.length > 0) {
+    workflowDef.models = referencedModels;
+  }
+
+  // Add scope alignment if enabled
+  if (wizardState.scopeAlignment?.enabled) {
+    workflowDef.scope_alignment = {
+      enabled: true,
+      coordinator_model: wizardState.scopeAlignment.coordinatorModel || 'openai/gpt-4o',
+      scope_construction_timeout_ms: wizardState.scopeAlignment.scopeTimeout || 30000,
+      alignment_timeout_ms: wizardState.scopeAlignment.alignmentTimeout || 30000
+    };
+  }
+
+  return workflowDef;
 }
 
 /**
@@ -97,7 +125,9 @@ function buildIndependentSynthesisWorkflow(workflow, state) {
     decisionMaker,
     visibilityMode,
     filters,
-    outputFormat
+    outputFormat,
+    useColumnWiseSummary,
+    variableInterpolation
   } = state;
 
   const outputVar = getOutputVariableName(outputFormat);
@@ -107,11 +137,12 @@ function buildIndependentSynthesisWorkflow(workflow, state) {
 
   let superstep = createSuperstep('gather_and_synthesize', problemStatement || 'Gather perspectives and synthesize final answer')
     .withGlobalInstruction(globalInstruction)
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model,
-      role_definition: p.role
-    })));
+    .withPerspectives(mapPerspectives(perspectives)); // UPDATED: Use perspectives instead of workers
+
+  // Add concurrency limit if specified
+  if (state.concurrencyLimit) {
+    superstep = superstep.withConcurrencyLimit(state.concurrencyLimit);
+  }
 
   // Add middleware if filters specified
   if (filters && filters.length > 0) {
@@ -121,13 +152,24 @@ function buildIndependentSynthesisWorkflow(workflow, state) {
     }
   }
 
+  // Add custom middleware if specified (Advanced tier)
+  if (state.middleware && state.middleware.length > 0) {
+    superstep = superstep.withMiddleware(state.middleware);
+  }
+
+  // Determine reduce strategy
+  const reduceStrategy = useColumnWiseSummary
+    ? 'column_wise_summary'
+    : getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS);
+
   // Add reduce phase
   superstep = superstep.withReduce({
-    strategy: getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS),
+    strategy: reduceStrategy,
     modelRef: chairmanModel,
     outputWriteTo: outputVar,
-    visibility: getVisibilityConfig(visibilityMode),
-    chairmanInstructions: chairmanInstructions
+    visibility: getVisibilityConfig(visibilityMode, state.advancedVisibility),
+    chairmanInstructions: chairmanInstructions,
+    variableInterpolation: variableInterpolation || false
   });
 
   return workflow.withSuperstep(superstep);
@@ -152,11 +194,19 @@ function buildDebateWorkflow(workflow, state) {
   // Stage 1: Initial responses
   let step1 = createSuperstep('stage1', problemStatement || 'Gather initial perspectives')
     .withGlobalInstruction(globalInstruction)
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model,
-      role_definition: p.role
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`,
+        role_definition: p.role
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS),
       modelRef: chairmanModel,
@@ -168,10 +218,18 @@ function buildDebateWorkflow(workflow, state) {
   let step15q = createSuperstep('stage1_5_questions', 'Generate cross-examination questions')
     .withGlobalInstruction('Review the responses and generate clarifying questions:\n\n${stage1_responses}')
     .withDefaultRole('Review other perspectives and generate 2-3 critical questions to uncover deeper insights.')
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.DEBATE),
       modelRef: chairmanModel,
@@ -184,10 +242,18 @@ function buildDebateWorkflow(workflow, state) {
   let step15a = createSuperstep('stage1_5_answers', 'Answer cross-examination questions')
     .withGlobalInstruction('Answer the questions directed at your perspective:\n\n${stage1_5_questions}')
     .withDefaultRole('Answer questions about your perspective clearly and directly.')
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS),
       modelRef: chairmanModel,
@@ -216,11 +282,19 @@ function buildBlindReviewWorkflow(workflow, state) {
   let superstep = createSuperstep('blind_review', problemStatement || 'Gather and evaluate responses anonymously')
     .withGlobalInstruction(globalInstruction)
     .withDefaultRole('You are a helpful AI assistant.')
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model,
-      role_definition: p.role || undefined
-    })));
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`,
+        role_definition: p.role || undefined
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }));
 
   // Add middleware if specified
   if (filters && filters.length > 0) {
@@ -254,11 +328,19 @@ function buildVotingWorkflow(workflow, state) {
 
   let superstep = createSuperstep('vote', problemStatement || 'Gather votes from all perspectives')
     .withGlobalInstruction(globalInstruction)
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model,
-      role_definition: p.role + '\n\nProvide your recommendation and vote clearly.'
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`,
+        role_definition: p.role + '\n\nProvide your recommendation and vote clearly.'
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.VOTING),
       modelRef: perspectives[0]?.model || 'openai/gpt-4', // Use first worker's model for counting
@@ -286,11 +368,19 @@ function buildMultiStageWorkflow(workflow, state) {
   // Stage 1: Initial perspectives
   let step1 = createSuperstep('gather_perspectives', problemStatement || 'Gather initial perspectives')
     .withGlobalInstruction(globalInstruction)
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: p.id || `worker_${idx}`,
-      model_ref: p.model,
-      role_definition: p.role
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: p.id || `worker_${idx}`,
+        role_definition: p.role
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS),
       modelRef: chairmanModel,
@@ -302,10 +392,18 @@ function buildMultiStageWorkflow(workflow, state) {
   let step2 = createSuperstep('peer_review', 'Peer review of responses')
     .withGlobalInstruction('Review and critique the responses below:\n\n${stage1_responses}')
     .withDefaultRole('Evaluate the responses critically. Identify strengths, weaknesses, and gaps.')
-    .withWorkers(perspectives.map((p, idx) => ({
-      worker_id: `reviewer_${idx}`,
-      model_ref: p.model
-    })))
+    .withWorkers(perspectives.map((p, idx) => {
+      const worker = {
+        worker_id: `reviewer_${idx}`
+      };
+
+      // Only add model_ref if user explicitly bound this perspective
+      if (p.modelBound && p.model) {
+        worker.model_ref = p.model;
+      }
+
+      return worker;
+    }))
     .withReduce({
       strategy: getReduceStrategy(INTERACTION_MODES.INDEPENDENT_SYNTHESIS),
       modelRef: chairmanModel,
@@ -436,6 +534,96 @@ function buildMiddlewareOperations(filters) {
 }
 
 /**
+ * Map wizard perspectives to DSL perspectives (CRITICAL - model-neutral by default)
+ *
+ * @param {Array} perspectives - Wizard perspective array
+ * @returns {Array} - DSL perspective array
+ */
+function mapPerspectives(perspectives) {
+  return perspectives.map((p, idx) => {
+    const perspective = {
+      perspective_id: p.id || sanitizeStepId(p.name) || `perspective_${idx}`,
+      instruction: p.role || p.instruction || ''
+    };
+
+    // CRITICAL: Only add model_ref if user explicitly bound this perspective to a specific model
+    if (p.modelBound && p.model) {
+      perspective.model_ref = p.model;
+    }
+    // Otherwise, model-neutral (all models in models[] array analyze this perspective)
+
+    return perspective;
+  });
+}
+
+/**
+ * Extract all referenced models from wizard state
+ * Returns array of unique model refs that should go in the models[] array
+ *
+ * @param {Object} wizardState - Wizard state
+ * @returns {Array<string>} - Array of unique model refs
+ */
+function extractReferencedModels(wizardState) {
+  const modelRefs = new Set();
+
+  // Add models from model-bound perspectives
+  if (wizardState.perspectives) {
+    wizardState.perspectives.forEach(p => {
+      if (p.modelBound && p.model) {
+        modelRefs.add(p.model);
+      }
+    });
+  }
+
+  // Add models from global list (if any model-neutral perspectives exist)
+  const hasModelNeutralPerspectives = wizardState.perspectives?.some(p => !p.modelBound);
+  if (hasModelNeutralPerspectives && wizardState.globalModels) {
+    wizardState.globalModels.forEach(m => {
+      if (m.modelRef) {
+        modelRefs.add(m.modelRef);
+      }
+    });
+  }
+
+  // Add chairman/reducer models
+  if (wizardState.decisionMaker?.model) {
+    modelRefs.add(wizardState.decisionMaker.model);
+  }
+
+  // Add models from follow-up steps
+  if (wizardState.followUpSteps) {
+    wizardState.followUpSteps.forEach(step => {
+      if (step.workerModel) {
+        modelRefs.add(step.workerModel);
+      }
+      if (step.workers) {
+        step.workers.forEach(w => {
+          if (w.model_ref) {
+            modelRefs.add(w.model_ref);
+          }
+        });
+      }
+    });
+  }
+
+  // Add models from middleware operations (llm_refine)
+  if (wizardState.middleware) {
+    wizardState.middleware.forEach(op => {
+      if (op.op === 'llm_refine' && op.config?.model_ref) {
+        modelRefs.add(op.config.model_ref);
+      }
+    });
+  }
+
+  // Add scope alignment coordinator model
+  if (wizardState.scopeAlignment?.enabled && wizardState.scopeAlignment.coordinatorModel) {
+    modelRefs.add(wizardState.scopeAlignment.coordinatorModel);
+  }
+
+  return Array.from(modelRefs);
+}
+
+/**
  * Generate a valid flow_id from problem statement
  */
 function generateFlowId(problemStatement) {
@@ -482,6 +670,72 @@ function getOutputVariableType(outputFormat) {
 }
 
 /**
+ * Build follow-up supersteps from wizard configuration
+ */
+function buildFollowUpSteps(workflow, state) {
+  const { followUpSteps, outputFormat } = state;
+
+  followUpSteps.forEach((step, index) => {
+    const stepId = `followup_${index + 1}_${sanitizeStepId(step.taskDescription)}`;
+
+    // Build global instruction with variable interpolation
+    const inputVarsText = (step.inputVariables || [])
+      .map(v => `\${${v}}`)
+      .join('\n\n');
+    const globalInstruction = step.taskDescription + (inputVarsText ? `\n\nInput:\n${inputVarsText}` : '');
+
+    let superstep = createSuperstep(stepId, step.taskDescription)
+      .withGlobalInstruction(globalInstruction);
+
+    // Add workers based on mode
+    if (step.mode === 'single_worker') {
+      superstep = superstep.withWorkers([{
+        worker_id: `followup_worker_${index + 1}`,
+        model_ref: step.workerModel,
+        role_definition: step.taskDescription
+      }]);
+    } else if (step.mode === 'multiple_workers') {
+      // Advanced mode - use configured workers (future)
+      superstep = superstep.withWorkers(step.workers || []);
+    }
+    // chairman_only mode has no workers
+
+    // Add reduce phase
+    const reduceModel = step.workerModel || getDefaultChairmanModel(state.perspectives);
+
+    superstep = superstep.withReduce({
+      strategy: step.reduceStrategy || 'simple_summary',
+      modelRef: reduceModel,
+      outputWriteTo: step.outputVar,
+      visibility: getVisibilityConfig(step.visibility || 'full'),
+      variableInterpolation: true // Enable variable interpolation
+    });
+
+    // Add variable declaration to workflow
+    workflow = workflow.withVariable(step.outputVar, 'string');
+
+    workflow = workflow.withSuperstep(superstep);
+  });
+
+  return workflow;
+}
+
+/**
+ * Sanitize step ID from task description
+ */
+function sanitizeStepId(description) {
+  if (!description) return 'untitled';
+
+  return description
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 3)
+    .join('_') || 'untitled';
+}
+
+/**
  * Validate wizard state before mapping
  */
 export function validateWizardState(wizardState) {
@@ -501,6 +755,28 @@ export function validateWizardState(wizardState) {
 
   if (!wizardState.interactionMode) {
     errors.push('Interaction mode is required');
+  }
+
+  // Validate follow-up steps if any
+  if (wizardState.followUpSteps && wizardState.followUpSteps.length > 0) {
+    wizardState.followUpSteps.forEach((step, index) => {
+      if (!step.taskDescription || step.taskDescription.trim() === '') {
+        errors.push(`Follow-up step ${index + 1}: Task description is required`);
+      }
+      if ((step.mode === 'single_worker' || step.mode === 'chairman_only') && !step.workerModel) {
+        errors.push(`Follow-up step ${index + 1}: Model selection is required`);
+      }
+      if (!step.outputVar || step.outputVar.trim() === '') {
+        errors.push(`Follow-up step ${index + 1}: Output variable name is required`);
+      }
+    });
+
+    // Check for duplicate output variables
+    const outputVars = wizardState.followUpSteps.map(s => s.outputVar).filter(v => v);
+    const duplicates = outputVars.filter((v, i) => outputVars.indexOf(v) !== i);
+    if (duplicates.length > 0) {
+      errors.push(`Duplicate output variable names: ${duplicates.join(', ')}`);
+    }
   }
 
   return errors;

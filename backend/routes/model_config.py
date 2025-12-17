@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter
 
-from .. import config
-from ..models import ModelConfigRequest
+from backend import config
+from backend.models import ModelConfigRequest
 
 router = APIRouter(prefix="/api", tags=["models"])
 

@@ -5,12 +5,12 @@ from typing import Dict, Any
 
 import backend.storage.registration
 
-from ..storage import audit
+from backend.storage import audit
 
-from .. import config, auth
-from ..auth_middleware import ensure_user_logged_in
-from ..models import RegisterRequest, LoginRequest, RefreshTokenRequest, WaitlistRequest
-from ..rate_limiter import limiter
+from backend import config, auth
+from backend.auth_middleware import ensure_user_logged_in
+from backend.models import RegisterRequest, LoginRequest, RefreshTokenRequest, WaitlistRequest
+from backend.rate_limiter import limiter
 
 router = APIRouter(prefix="/api", tags=["auth"])
 

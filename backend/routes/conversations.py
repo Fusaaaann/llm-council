@@ -7,15 +7,18 @@ import uuid
 import json
 import asyncio
 import time
+import logging
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 import backend.storage.conversations
 import backend.storage.encryption
 import backend.storage.publish
 
-from .. import config, auth
-from ..stage_config import STAGES, SPECIAL_EVENTS, get_stage_config
-from ..council import (
+from backend import config, auth
+from backend.stage_config import STAGES, SPECIAL_EVENTS, get_stage_config
+from backend.council import (
     stage1_collect_responses,
     stage1_5_cross_interrogation,
     stage1_5_collect_answers,
@@ -24,8 +27,8 @@ from ..council import (
     calculate_aggregate_rankings,
     generate_conversation_title
 )
-from ..auth_middleware import get_current_user_optional, get_profile_id_for_request
-from ..models import (
+from backend.auth_middleware import get_current_user_optional, get_profile_id_for_request
+from backend.models import (
     CreateConversationRequest,
     SendMessageRequest,
     ResumeStreamRequest,
@@ -34,8 +37,8 @@ from ..models import (
     Conversation,
     ConversationMetadata
 )
-from ..utils import conversation_to_markdown, conversation_to_html, conversation_to_json
-from ..rate_limiter import limiter
+from backend.utils import conversation_to_markdown, conversation_to_html, conversation_to_json
+from backend.rate_limiter import limiter
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -815,10 +818,13 @@ async def send_message_stream(
                 backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
         except Exception as e:
+            # Log full stack trace to backend logs
+            logger.error(f"Stream error for conversation {conversation_id}: {str(e)}", exc_info=True)
+
             # Set loading state to false on error (in case finally block didn't run)
             backend.storage.conversations.set_conversation_loading(conversation_id, False, pid)
 
-            # Send error event (without event ID since stream_id may not be initialized)
+            # Send error event to frontend
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(

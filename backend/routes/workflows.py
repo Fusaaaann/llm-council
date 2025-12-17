@@ -5,11 +5,11 @@ from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any, Optional
 import uuid
 
-from ..storage import dsl
-from ..workflow_schema import validate_workflow, validate_workflow_models
-from ..auth_middleware import ensure_user_logged_in, get_profile_id_for_request
-from ..models import BaseModel
-from ..rate_limiter import limiter
+from backend.storage import dsl
+from backend.workflow_schema import validate_workflow, validate_workflow_models
+from backend.auth_middleware import ensure_user_logged_in, get_profile_id_for_request
+from backend.models import BaseModel
+from backend.rate_limiter import limiter
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 

@@ -12,7 +12,7 @@
       "step_id": "clean_subquery",
       "description": "Get a fresh, unbiased perspective without any context",
       "map_phase": {
-        "workers": []
+        "perspectives": []
       },
       "reduce_phase": {
         "strategy": "subquery_single_model",
@@ -22,7 +22,8 @@
           "include_original_input": true,
           "include_conversation_history": false,
           "include_worker_outputs": false,
-          "mask_worker_identities": true
+          "mask_worker_identities": true,
+          "include_rejected_items": false
         },
         "chairman_instructions": "Provide a thoughtful, unbiased analysis of the question without any prior context or discussion."
       }

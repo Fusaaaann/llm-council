@@ -4,9 +4,9 @@ from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, Dict, Any
 
-from .storage import profiles
-from .auth import verify_access_token, get_user_by_id
-from .config import ENVIRONMENT
+from backend.storage import profiles
+from backend.auth import verify_access_token, get_user_by_id
+from backend.config import ENVIRONMENT
 
 
 security = HTTPBearer(auto_error=False)
@@ -37,7 +37,7 @@ async def get_current_user_optional(
     token = credentials.credentials
 
     # Try connection token first (for streaming sessions)
-    from .auth import verify_connection_token
+    from backend.auth import verify_connection_token
     connection_payload = verify_connection_token(token)
     if connection_payload:
         # Valid connection token
@@ -102,7 +102,7 @@ async def ensure_user_logged_in(
     """
     # In local mode without credentials, return a default user
     if ENVIRONMENT == "local" and not credentials:
-        from .config import DEFAULT_PROFILE_ID
+        from backend.config import DEFAULT_PROFILE_ID
         return {
             "id": "default",
             "email": "local@localhost",
@@ -125,7 +125,7 @@ def user_has_profile_access(user_id: str, profile_id: str) -> bool:
     Returns:
         True if user has access, False otherwise
     """
-    from . import auth as auth_module
+    from backend import auth as auth_module
 
     # Get user data
     user = auth_module.get_user_by_id(user_id)

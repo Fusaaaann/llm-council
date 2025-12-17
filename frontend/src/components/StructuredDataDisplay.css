@@ -1,0 +1,302 @@
+/**
+ * Schema-Neutral Structured Data Display Styles
+ *
+ * Theme variants: purple (synthesis), blue (workflow), green (council - future)
+ */
+
+/* Main container */
+.structured-data-container {
+  width: 100%;
+}
+
+/* Section (object key-value pairs) */
+.structured-data-section {
+  margin-bottom: 16px;
+}
+
+.structured-data-section:last-child {
+  margin-bottom: 0;
+}
+
+/* Section headers */
+.structured-data-header {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+}
+
+/* Purple theme (synthesis) */
+.structured-data-container.purple-theme .structured-data-header {
+  color: #7b1fa2;
+  border-bottom: 2px solid #e1bee7;
+}
+
+/* Blue theme (workflow) */
+.structured-data-container.blue-theme .structured-data-header {
+  color: #1976d2;
+  border-bottom: 2px solid #90caf9;
+}
+
+/* Green theme (council - future) */
+.structured-data-container.green-theme .structured-data-header {
+  color: #388e3c;
+  border-bottom: 2px solid #a5d6a7;
+}
+
+/* Content areas */
+.structured-data-content {
+  padding-left: 16px;
+}
+
+/* Nested sections - increase indentation */
+.structured-data-section.depth-1 .structured-data-content {
+  padding-left: 16px;
+}
+
+.structured-data-section.depth-2 .structured-data-content {
+  padding-left: 12px;
+}
+
+.structured-data-section.depth-3 .structured-data-content {
+  padding-left: 8px;
+}
+
+/* Object container */
+.structured-data-object {
+  width: 100%;
+}
+
+/* Lists (bulleted/numbered) */
+.structured-data-list {
+  margin: 8px 0;
+  padding-left: 24px;
+  line-height: 1.6;
+}
+
+.structured-data-list-item {
+  margin: 6px 0;
+}
+
+/* Array of objects - card layout */
+.structured-data-array-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.structured-data-array-item-card {
+  background: #f9f9f9;
+  border-radius: 6px;
+  padding: 12px;
+  border-left: 3px solid #e0e0e0;
+}
+
+/* Purple theme cards */
+.structured-data-container.purple-theme .structured-data-array-item-card {
+  border-left-color: #9c27b0;
+}
+
+/* Blue theme cards */
+.structured-data-container.blue-theme .structured-data-array-item-card {
+  border-left-color: #1976d2;
+}
+
+/* Green theme cards */
+.structured-data-container.green-theme .structured-data-array-item-card {
+  border-left-color: #388e3c;
+}
+
+.structured-data-array-item-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.structured-data-array-item-content {
+  padding-left: 0;
+}
+
+/* Primitives */
+.structured-data-primitive {
+  font-weight: 500;
+  color: #424242;
+}
+
+.structured-data-null {
+  color: #999;
+  font-style: italic;
+}
+
+.structured-data-empty {
+  color: #999;
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* Depth exceeded fallback */
+.structured-data-depth-exceeded {
+  background: #fff3e0;
+  padding: 12px;
+  border-radius: 4px;
+  border-left: 3px solid #ff9800;
+  margin: 8px 0;
+}
+
+.structured-data-depth-exceeded::before {
+  content: "⚠️ Max depth exceeded - showing raw JSON:";
+  display: block;
+  font-size: 12px;
+  color: #e65100;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+/* Raw JSON toggle */
+.structured-data-raw-toggle {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.structured-data-raw-toggle-btn {
+  background: #f5f5f5;
+  border: 1px solid #d0d0d0;
+  color: #666;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.structured-data-raw-toggle-btn:hover {
+  background: #e0e0e0;
+  border-color: #b0b0b0;
+}
+
+.structured-data-raw-content {
+  margin-top: 12px;
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+  overflow-x: auto;
+  font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+  color: #424242;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Expand button for long text */
+.structured-data-expand-btn {
+  margin-top: 8px;
+  background: transparent;
+  border: none;
+  color: #666;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+
+/* Purple theme expand button */
+.structured-data-container.purple-theme .structured-data-expand-btn {
+  color: #7b1fa2;
+}
+
+.structured-data-container.purple-theme .structured-data-expand-btn:hover {
+  color: #6a1b9a;
+}
+
+/* Blue theme expand button */
+.structured-data-container.blue-theme .structured-data-expand-btn {
+  color: #1976d2;
+}
+
+.structured-data-container.blue-theme .structured-data-expand-btn:hover {
+  color: #1565c0;
+}
+
+/* Green theme expand button */
+.structured-data-container.green-theme .structured-data-expand-btn {
+  color: #388e3c;
+}
+
+.structured-data-container.green-theme .structured-data-expand-btn:hover {
+  color: #2e7d32;
+}
+
+/* Inherit markdown-content styles from UnifiedStage.css */
+.structured-data-container .markdown-content {
+  /* These styles are already defined in UnifiedStage.css */
+  /* Just ensure they're applied within this container */
+}
+
+.structured-data-container .markdown-content p {
+  margin: 0 0 12px 0;
+}
+
+.structured-data-container .markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.structured-data-container .markdown-content ul,
+.structured-data-container .markdown-content ol {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.structured-data-container .markdown-content li {
+  margin: 6px 0;
+}
+
+.structured-data-container .markdown-content code {
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+.structured-data-container .markdown-content pre {
+  background: #f5f5f5;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.structured-data-container .markdown-content pre code {
+  background: none;
+  padding: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .structured-data-header {
+    font-size: 13px;
+  }
+
+  .structured-data-content {
+    padding-left: 12px;
+  }
+
+  .structured-data-list {
+    padding-left: 20px;
+  }
+
+  .structured-data-array-item-card {
+    padding: 10px;
+  }
+
+  .structured-data-raw-content {
+    font-size: 12px;
+    max-height: 300px;
+  }
+}

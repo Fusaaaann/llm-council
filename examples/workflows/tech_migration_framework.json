@@ -14,34 +14,37 @@
       "map_phase": {
         "concurrency_limit": 3,
         "global_instruction_overlay": "Workflow Purpose: Technology Migration Decision Framework\n\nContext: Technical stakeholders requiring comprehensive cost/risk/benefit analysis\n\nPriorities: thorough, balanced, data-driven\n\nConstraints: Must consider migration costs, technical debt, team expertise, and business continuity",
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "technical_analyst",
-            "model_ref": "openai/gpt-4-turbo",
+            "perspective_id": "technical_analyst",
             "instruction": "Analyze the technical feasibility, architecture implications, and implementation complexity. Consider compatibility, performance, scalability, and technical debt."
           },
           {
-            "worker_id": "risk_assessor",
-            "model_ref": "anthropic/claude-3.5-sonnet",
+            "perspective_id": "risk_assessor",
             "instruction": "Evaluate risks including downtime, data migration challenges, rollback strategies, and business continuity. Identify potential failure modes and mitigation strategies."
           },
           {
-            "worker_id": "cost_benefit_analyst",
-            "model_ref": "google/gemini-2.0-flash-exp",
+            "perspective_id": "cost_benefit_analyst",
             "instruction": "Analyze total cost of ownership (TCO), including licensing, infrastructure, training, and maintenance. Compare against expected benefits and ROI timeline."
           }
         ]
       },
       "reduce_phase": {
         "strategy": "council_chairman",
-        "model_ref": "openai/gpt-4-turbo",
+        "model_ref": "openai/gpt-5.1",
         "output_write_to": "final_recommendation",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         },
         "chairman_instructions": "Synthesize the technical, risk, and financial analyses into a clear recommendation. Provide:\n\n1. Executive Summary (Go/No-Go recommendation)\n2. Key Technical Findings\n3. Risk Assessment Summary\n4. Cost-Benefit Analysis\n5. Implementation Roadmap (if recommended)\n6. Alternative Approaches (if applicable)\n\nBe decisive but acknowledge uncertainty where it exists."
       }
     }
+  ],
+  "models": [
+    "openai/gpt-5.1"
   ]
 }

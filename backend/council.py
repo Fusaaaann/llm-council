@@ -1,7 +1,7 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple
-from .openrouter import query_models_parallel, query_model
+from backend.openrouter import query_models_parallel, query_model
 
 
 async def stage1_collect_responses(messages: List[Dict[str, str]], council_models: List[str]) -> List[Dict[str, Any]]:
@@ -235,54 +235,26 @@ async def stage2_collect_rankings(
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
-    # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+    from backend.ranking_utils import create_anonymous_labels, build_ranking_prompt, parse_ranking_from_text as _parse_ranking
 
-    # Create mapping from label to model name
-    label_to_model = {
-        f"Response {label}": result['model']
+    # Create anonymized labels for responses (Response A, Response B, etc.)
+    labels, label_to_model = create_anonymous_labels(stage1_results, id_field='model')
+
+    # Build anonymized responses dict
+    anonymized_responses = {
+        f"Response {label}": result['response']
         for label, result in zip(labels, stage1_results)
     }
-
-    # Build the ranking prompt
-    responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
-    ])
 
     # Get the current user query (last message)
     user_query = messages[-1]['content']
 
-    ranking_prompt = f"""You are evaluating different responses to the following question:
-
-Question: {user_query}
-
-Here are the responses from different models (anonymized):
-
-{responses_text}
-
-Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
-
-IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
-- Start with the line "FINAL RANKING:" (all caps, with colon)
-- Then list the responses from best to worst as a numbered list
-- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
-- Do not add any other text or explanations in the ranking section
-
-Example of the correct format for your ENTIRE response:
-
-Response A provides good detail on X but misses Y...
-Response B is accurate but lacks depth on Z...
-Response C offers the most comprehensive answer...
-
-FINAL RANKING:
-1. Response C
-2. Response A
-3. Response B
-
-Now provide your evaluation and ranking:"""
+    # Build the ranking prompt using shared utility
+    ranking_prompt = build_ranking_prompt(
+        question=user_query,
+        responses=anonymized_responses,
+        custom_instructions=None  # Use default instructions
+    )
 
     # Build messages for ranking (conversation history + ranking prompt)
     ranking_messages = messages[:-1] + [{"role": "user", "content": ranking_prompt}]
@@ -295,7 +267,7 @@ Now provide your evaluation and ranking:"""
     for model, response in responses.items():
         if response is not None:
             full_text = response.get('content', '')
-            parsed = parse_ranking_from_text(full_text)
+            parsed = _parse_ranking(full_text)
             stage2_results.append({
                 "model": model,
                 "ranking": full_text,
@@ -401,34 +373,17 @@ def parse_ranking_from_text(ranking_text: str) -> List[str]:
     """
     Parse the FINAL RANKING section from the model's response.
 
+    DEPRECATED: Use ranking_utils.parse_ranking_from_text() instead.
+    This wrapper is kept for backward compatibility.
+
     Args:
         ranking_text: The full text response from the model
 
     Returns:
         List of response labels in ranked order
     """
-    import re
-
-    # Look for "FINAL RANKING:" section
-    if "FINAL RANKING:" in ranking_text:
-        # Extract everything after "FINAL RANKING:"
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            # Try to extract numbered list format (e.g., "1. Response A")
-            # This pattern looks for: number, period, optional space, "Response X"
-            numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
-            if numbered_matches:
-                # Extract just the "Response X" part
-                return [re.search(r'Response [A-Z]', m).group() for m in numbered_matches]
-
-            # Fallback: Extract all "Response X" patterns in order
-            matches = re.findall(r'Response [A-Z]', ranking_section)
-            return matches
-
-    # Fallback: try to find any "Response X" patterns in order
-    matches = re.findall(r'Response [A-Z]', ranking_text)
-    return matches
+    from backend.ranking_utils import parse_ranking_from_text as _parse_ranking
+    return _parse_ranking(ranking_text)
 
 
 def calculate_aggregate_rankings(
@@ -438,6 +393,9 @@ def calculate_aggregate_rankings(
     """
     Calculate aggregate rankings across all models.
 
+    DEPRECATED: Use ranking_utils.calculate_aggregate_rankings_simple() instead.
+    This wrapper is kept for backward compatibility.
+
     Args:
         stage2_results: Rankings from each model
         label_to_model: Mapping from anonymous labels to model names
@@ -445,37 +403,12 @@ def calculate_aggregate_rankings(
     Returns:
         List of dicts with model name and average rank, sorted best to worst
     """
-    from collections import defaultdict
-
-    # Track positions for each model
-    model_positions = defaultdict(list)
-
-    for ranking in stage2_results:
-        ranking_text = ranking['ranking']
-
-        # Parse the ranking from the structured format
-        parsed_ranking = parse_ranking_from_text(ranking_text)
-
-        for position, label in enumerate(parsed_ranking, start=1):
-            if label in label_to_model:
-                model_name = label_to_model[label]
-                model_positions[model_name].append(position)
-
-    # Calculate average position for each model
-    aggregate = []
-    for model, positions in model_positions.items():
-        if positions:
-            avg_rank = sum(positions) / len(positions)
-            aggregate.append({
-                "model": model,
-                "average_rank": round(avg_rank, 2),
-                "rankings_count": len(positions)
-            })
-
-    # Sort by average rank (lower is better)
-    aggregate.sort(key=lambda x: x['average_rank'])
-
-    return aggregate
+    from backend.ranking_utils import calculate_aggregate_rankings_simple
+    return calculate_aggregate_rankings_simple(
+        rankings=stage2_results,
+        label_to_id=label_to_model,
+        id_field='model'
+    )
 
 
 async def generate_conversation_title(user_query: str) -> str:

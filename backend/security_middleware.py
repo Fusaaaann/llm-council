@@ -3,7 +3,7 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from .config import ENVIRONMENT
+from backend.config import ENVIRONMENT
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

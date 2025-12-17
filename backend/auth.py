@@ -14,10 +14,10 @@ from passlib.hash import bcrypt
 import backend.storage.profiles
 import backend.storage.registration
 
-from .storage.database import get_db_connection
-from .encryption import FernetProvider, encrypt_data, decrypt_data, create_encryption_metadata, is_encrypted
-from .config import ENCRYPTION_ENABLED, ENCRYPTION_KEY
-from .storage.database import init_database
+from backend.storage.database import get_db_connection
+from backend.encryption import FernetProvider, encrypt_data, decrypt_data, create_encryption_metadata, is_encrypted
+from backend.config import ENCRYPTION_ENABLED, ENCRYPTION_KEY
+from backend.storage.database import init_database
 
 # JWT Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
@@ -566,7 +566,7 @@ def create_user(email: str, password: str, name: str, invite_token: Optional[str
     user_id = generate_user_id()
 
     # Create default profile for user
-    from . import  storage
+    from backend import storage
     profile_id = f"profile_{user_id}"
     backend.storage.profiles.create_profile(profile_id, f"{name}'s Profile", {})
 

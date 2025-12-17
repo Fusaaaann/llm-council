@@ -5,8 +5,8 @@ from typing import Dict, Any, Optional
 
 import backend.storage.publish
 
-from ..auth_middleware import get_current_user_optional, get_profile_id_for_request
-from ..models import Conversation
+from backend.auth_middleware import get_current_user_optional, get_profile_id_for_request
+from backend.models import Conversation
 
 router = APIRouter(prefix="/api/forum", tags=["forum"])
 

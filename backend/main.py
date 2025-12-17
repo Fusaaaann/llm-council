@@ -7,13 +7,13 @@ import sys
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from . import config
-from .startup_validation import run_startup_validation, SecurityValidationError
-from .security_middleware import SecurityHeadersMiddleware
-from .rate_limiter import limiter
+from backend import config
+from backend.startup_validation import run_startup_validation, SecurityValidationError
+from backend.security_middleware import SecurityHeadersMiddleware
+from backend.rate_limiter import limiter
 
 # Import route modules
-from .routes import conversations, auth, profiles, forum, model_config, workflows
+from backend.routes import conversations, auth, profiles, forum, model_config, workflows
 
 
 @asynccontextmanager
@@ -29,8 +29,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: Revoke all sessions for security
-    from .auth import revoke_all_sessions
-    from .storage.audit import log_session_revocation
+    from backend.auth import revoke_all_sessions
+    from backend.storage.audit import log_session_revocation
     revoke_all_sessions()
     log_session_revocation("server_shutdown")
     print("All sessions revoked on shutdown", file=sys.stderr)

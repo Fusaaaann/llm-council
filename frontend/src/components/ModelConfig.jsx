@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import './ModelConfig.css';
 import EncryptionControls from './EncryptionControls';
+import WorkflowEditor from './WorkflowEditor';
 import { api } from '../api';
 
 export default function ModelConfig({ isOpen, onClose, onSave, currentConversationId, currentConversation }) {
@@ -9,6 +10,7 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
   const [newModel, setNewModel] = useState('');
   const [showEncryption, setShowEncryption] = useState(false); // Hidden by default
   const [workflowInput, setWorkflowInput] = useState(''); // Workflow JSON input
+  const [showWorkflowEditor, setShowWorkflowEditor] = useState(false); // Workflow editor modal
 
   // Model config is read-only for existing conversations (models set at creation)
   const isReadOnly = currentConversation && currentConversation.messages && currentConversation.messages.length > 0;
@@ -218,40 +220,90 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
               </p>
               {!isReadOnly ? (
                 <>
-                  <textarea
-                    value={workflowInput}
-                    onChange={(e) => setWorkflowInput(e.target.value)}
-                    placeholder='Paste workflow JSON here...'
-                    rows={10}
-                    style={{
-                      width: '100%',
-                      fontFamily: 'monospace',
-                      fontSize: '12px',
-                      padding: '8px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px'
-                    }}
-                  />
-                  {workflowInput.trim() !== '' && (
-                    <button
-                      onClick={() => setWorkflowInput('')}
-                      style={{
-                        marginTop: '8px',
-                        padding: '6px 12px',
-                        background: '#dc3545',
-                        color: 'white',
-                        border: 'none',
+                  {workflowInput.trim() !== '' ? (
+                    <div>
+                      <div style={{
+                        padding: '8px',
+                        background: '#f5f5f5',
                         borderRadius: '4px',
-                        cursor: 'pointer'
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                        maxHeight: '100px',
+                        overflow: 'auto',
+                        marginBottom: '8px'
+                      }}>
+                        {workflowInput.substring(0, 200)}
+                        {workflowInput.length > 200 ? '...' : ''}
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={() => setShowWorkflowEditor(true)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: '#4a90e2',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          Edit Workflow
+                        </button>
+                        <button
+                          onClick={() => setWorkflowInput('')}
+                          style={{
+                            padding: '8px 12px',
+                            background: '#dc3545',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Clear Workflow
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <textarea
+                      value={workflowInput}
+                      onChange={(e) => setWorkflowInput(e.target.value)}
+                      placeholder='Paste workflow JSON here...'
+                      rows={10}
+                      style={{
+                        width: '100%',
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                        padding: '8px',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px'
                       }}
-                    >
-                      Clear Workflow (Restore Council Config)
-                    </button>
+                    />
                   )}
                 </>
               ) : (
-                <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px', fontFamily: 'monospace', fontSize: '12px', maxHeight: '200px', overflow: 'auto' }}>
-                  {workflowInput || 'No workflow configured'}
+                <div>
+                  <div style={{ padding: '8px', background: '#f5f5f5', borderRadius: '4px', fontFamily: 'monospace', fontSize: '12px', maxHeight: '200px', overflow: 'auto', marginBottom: '8px' }}>
+                    {workflowInput || 'No workflow configured'}
+                  </div>
+                  {workflowInput.trim() !== '' && (
+                    <button
+                      onClick={() => setShowWorkflowEditor(true)}
+                      style={{
+                        padding: '8px 12px',
+                        background: '#4a90e2',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontWeight: '500'
+                      }}
+                    >
+                      View Workflow Details
+                    </button>
+                  )}
                 </div>
               )}
             </details>
@@ -279,6 +331,19 @@ export default function ModelConfig({ isOpen, onClose, onSave, currentConversati
           )}
         </div>
       </div>
+
+      {/* Workflow Editor Modal */}
+      {showWorkflowEditor && workflowInput.trim() !== '' && (
+        <WorkflowEditor
+          workflowJson={workflowInput}
+          isReadOnly={isReadOnly}
+          onSave={(updatedJson) => {
+            setWorkflowInput(updatedJson);
+            setShowWorkflowEditor(false);
+          }}
+          onClose={() => setShowWorkflowEditor(false)}
+        />
+      )}
     </div>
   );
 }

@@ -48,8 +48,10 @@ export function getReduceStrategy(interactionMode) {
 
 /**
  * Get the appropriate visibility configuration
+ * @param {string} visibilityMode - Basic visibility mode (full, blind, partial)
+ * @param {Object} advancedVisibility - Optional advanced visibility overrides
  */
-export function getVisibilityConfig(visibilityMode) {
+export function getVisibilityConfig(visibilityMode, advancedVisibility = null) {
   const visibilityMap = {
     [VISIBILITY_MODES.FULL]: visibility.full(),
     [VISIBILITY_MODES.BLIND]: visibility.blindReview(),
@@ -62,7 +64,18 @@ export function getVisibilityConfig(visibilityMode) {
     })
   };
 
-  return visibilityMap[visibilityMode] || visibility.full();
+  // Get base visibility config
+  let config = visibilityMap[visibilityMode] || visibility.full();
+
+  // Apply advanced visibility overrides if provided (Advanced tier)
+  if (advancedVisibility) {
+    config = visibility.custom({
+      ...config,
+      ...advancedVisibility
+    });
+  }
+
+  return config;
 }
 
 /**

@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { mapWizardStateToWorkflow, validateWizardState } from '../utils/workflowWizardMapper.js';
 import { getStrategyDescription } from '../utils/strategyTemplates.js';
 import { isValidWorkflowId, sanitizeWorkflowId } from '../utils/workflowIdGenerator.js';
+import { detectTier, getActiveAdvancedFeatures, TIERS } from '../utils/tierDetection.js';
+import { validateWorkflowDSL } from '../utils/dslValidator.js';
+import TierBadge from '../components/TierBadge.jsx';
 import { api } from '../../../api.js';
 
 function Step6Review({ state, onChange, onBack, onSave }) {
@@ -11,12 +14,21 @@ function Step6Review({ state, onChange, onBack, onSave }) {
   const [workflowName, setWorkflowName] = useState(state.workflowId || '');
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [workflowIdError, setWorkflowIdError] = useState('');
+  const [dslValidationResult, setDslValidationResult] = useState(null);
+
+  // Detect tier
+  const currentTier = detectTier(state);
+  const activeAdvancedFeatures = getActiveAdvancedFeatures(state);
 
   // Auto-generate workflow on mount
   useState(() => {
     try {
       const workflow = mapWizardStateToWorkflow(state);
       setGeneratedWorkflow(workflow);
+
+      // Auto-validate DSL on generation
+      const dslValidation = validateWorkflowDSL(workflow);
+      setDslValidationResult(dslValidation);
     } catch (error) {
       console.error('Error generating workflow:', error);
     }
@@ -35,6 +47,11 @@ function Step6Review({ state, onChange, onBack, onSave }) {
 
       const workflow = mapWizardStateToWorkflow(state);
       setGeneratedWorkflow(workflow);
+
+      // Client-side DSL validation
+      const dslValidation = validateWorkflowDSL(workflow);
+      setDslValidationResult(dslValidation);
+
       setValidationResult(null);
     } catch (error) {
       setValidationResult({
@@ -130,13 +147,35 @@ function Step6Review({ state, onChange, onBack, onSave }) {
   return (
     <div className="wizard-step step-review">
       <div className="step-header">
-        <h2>Step 6: Review & Export Workflow</h2>
+        <h2>Step 7: Review & Export Workflow</h2>
         <p className="step-description">
-          Review your configuration and generate the workflow definition (JSON) that powers the advanced editor and runtime.
+          Review and export your workflow definition.
         </p>
       </div>
 
       <div className="step-content">
+        {/* Tier Summary */}
+        <div className="tier-summary-section">
+          <div className="tier-summary-header">
+            <h3>Workflow Configuration</h3>
+            <TierBadge tier={currentTier} />
+          </div>
+
+          {currentTier === TIERS.ADVANCED && activeAdvancedFeatures.length > 0 && (
+            <div className="advanced-features-summary">
+              <h4>⚡ Advanced Features in Use:</h4>
+              <ul className="advanced-features-list">
+                {activeAdvancedFeatures.map(feature => (
+                  <li key={feature}>
+                    <span className="feature-icon">✓</span>
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
         {/* Summary */}
         <div className="workflow-summary">
           <h3>Workflow Summary</h3>
@@ -216,6 +255,101 @@ function Step6Review({ state, onChange, onBack, onSave }) {
                 </div>
               </div>
             )}
+
+            {/* Global Models Summary */}
+            {state.globalModels && state.globalModels.filter(m => !m.isDefault).length > 0 && (
+              <div className="summary-item">
+                <label>Custom Models:</label>
+                <span>{state.globalModels.filter(m => !m.isDefault).length} custom model(s) added</span>
+                <ul className="perspectives-list-compact">
+                  {state.globalModels.filter(m => !m.isDefault).map((model, idx) => (
+                    <li key={idx}>{model.label} ({model.modelRef})</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Follow-Up Steps Summary */}
+            {state.followUpSteps && state.followUpSteps.length > 0 && (
+              <div className="summary-item">
+                <label>Follow-Up Steps:</label>
+                <span>{state.followUpSteps.length} additional processing step(s)</span>
+                <ul className="perspectives-list-compact">
+                  {state.followUpSteps.map((step, idx) => (
+                    <li key={idx}>
+                      Step {idx + 1}: {step.taskDescription || 'Untitled'} → {step.outputVar}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Advanced Tier Fields */}
+            {state.concurrencyLimit && (
+              <div className="summary-item">
+                <label>Concurrency Limit:</label>
+                <span className="badge">{state.concurrencyLimit} concurrent workers</span>
+              </div>
+            )}
+
+            {state.middleware && state.middleware.length > 0 && (
+              <div className="summary-item">
+                <label>Middleware Operations:</label>
+                <span>{state.middleware.length} operation(s)</span>
+                <ul className="perspectives-list-compact">
+                  {state.middleware.map((op, idx) => (
+                    <li key={idx}>
+                      {op.op} (apply to: {op.apply_to?.join(', ') || '*'})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {state.useColumnWiseSummary && (
+              <div className="summary-item">
+                <label>Reduction Strategy:</label>
+                <span className="badge-secondary">Column-Wise Summary</span>
+              </div>
+            )}
+
+            {state.variables && state.variables.length > 0 && (
+              <div className="summary-item">
+                <label>Custom Variables:</label>
+                <span>{state.variables.length} variable(s) defined</span>
+                <ul className="perspectives-list-compact">
+                  {state.variables.map((v, idx) => (
+                    <li key={idx}>
+                      {v.name} ({v.type}){v.required ? ' *' : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {state.variableInterpolation && (
+              <div className="summary-item">
+                <label>Variable Interpolation:</label>
+                <span className="badge-secondary">Enabled</span>
+              </div>
+            )}
+
+            {state.scopeAlignment?.enabled && (
+              <div className="summary-item">
+                <label>Scope Alignment:</label>
+                <span className="badge-secondary">Enabled</span>
+                <p className="help-text">
+                  Coordinator: {state.scopeAlignment.coordinatorModel || 'Not specified'}
+                </p>
+              </div>
+            )}
+
+            {state.advancedVisibility?.includeRejectedItems && (
+              <div className="summary-item">
+                <label>Include Rejected Items:</label>
+                <span className="badge-secondary">Yes</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -240,9 +374,9 @@ function Step6Review({ state, onChange, onBack, onSave }) {
             )}
             <span className="help-text">
               {state.workflowId ? (
-                <>Auto-generated from your workflow goal. You can customize it if needed.</>
+                <>Auto-generated. Customize if needed.</>
               ) : (
-                <>Unique identifier for this workflow (lowercase, underscores/hyphens allowed).</>
+                <>Unique ID (lowercase, underscores/hyphens).</>
               )}
             </span>
           </div>
@@ -269,6 +403,37 @@ function Step6Review({ state, onChange, onBack, onSave }) {
                 <ul>
                   {validationResult.errors?.map((err, i) => (
                     <li key={i}>{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Client-Side DSL Validation */}
+        {dslValidationResult && (
+          <div className="dsl-validation-section">
+            <h4>DSL Schema Validation</h4>
+            {dslValidationResult.valid ? (
+              <div className="validation-success">
+                <p>✅ DSL structure is valid</p>
+              </div>
+            ) : (
+              <div className="validation-errors">
+                <p>⚠️ DSL validation issues found:</p>
+                <ul>
+                  {dslValidationResult.errors?.map((err, i) => (
+                    <li key={i} className="validation-error">{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {dslValidationResult.warnings && dslValidationResult.warnings.length > 0 && (
+              <div className="validation-warnings">
+                <p>⚠️ Warnings:</p>
+                <ul>
+                  {dslValidationResult.warnings.map((warn, i) => (
+                    <li key={i} className="validation-warning">{warn}</li>
                   ))}
                 </ul>
               </div>

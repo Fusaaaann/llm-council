@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Tuple
-from .config import ENVIRONMENT, JWT_SECRET_KEY, ENCRYPTION_ENABLED, ENCRYPTION_KEY
+from backend.config import ENVIRONMENT, JWT_SECRET_KEY, ENCRYPTION_ENABLED, ENCRYPTION_KEY
 
 
 class SecurityValidationError(Exception):

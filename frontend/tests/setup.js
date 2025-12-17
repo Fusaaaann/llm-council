@@ -20,6 +20,6 @@ const localStorageMock = {
 
 // Set up localStorage mock
 beforeEach(() => {
-  global.localStorage = localStorageMock;
+  globalThis.localStorage = localStorageMock;
   localStorageMock.getItem.mockReturnValue(null);
 });

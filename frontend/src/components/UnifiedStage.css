@@ -198,8 +198,36 @@
   font-size: 15px;
 }
 
-/* Worker Perspectives section */
-.worker-perspectives {
+/* Placeholder for final output while loading */
+.output-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  color: #666;
+  font-size: 14px;
+  font-style: italic;
+  background: #f9f9f9;
+  border-radius: 4px;
+  border: 1px dashed #90caf9;
+}
+
+.output-placeholder.empty {
+  color: #999;
+  justify-content: center;
+}
+
+.placeholder-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e3f2fd;
+  border-top: 2px solid #1976d2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* ===== SUPERSTEPS CONTAINER (Unified Worker + Reducer View) ===== */
+.supersteps-container {
   background: #ffffff;
   border-radius: 6px;
   border: 1px solid #90caf9;
@@ -207,19 +235,20 @@
   overflow: hidden;
 }
 
-.perspectives-header {
+.supersteps-header {
   padding: 14px 18px;
   background: #e3f2fd;
   border-bottom: 1px solid #90caf9;
 }
 
-.perspectives-header .section-title {
+.supersteps-header h3 {
   font-weight: 600;
   font-size: 14px;
   color: #1565c0;
   margin: 0;
 }
 
+/* Individual superstep section (collapsible) */
 .superstep-section {
   border-bottom: 1px solid #e0e0e0;
 }
@@ -252,8 +281,25 @@
 }
 
 .superstep-content {
+  background: #ffffff;
+}
+
+/* Worker Outputs Subsection (within a superstep) */
+.worker-outputs-subsection {
   padding: 16px;
   background: #ffffff;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.worker-outputs-subsection:last-child {
+  border-bottom: none;
+}
+
+.worker-outputs-subsection h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1565c0;
+  margin: 0 0 12px 0;
 }
 
 .worker-tabs {
@@ -318,6 +364,57 @@
   color: #333;
   line-height: 1.6;
   font-size: 14px;
+}
+
+/* Reducer Synthesis Subsection (within a superstep) */
+.reducer-synthesis-subsection {
+  padding: 16px;
+  background: #fafafa;
+}
+
+.reducer-synthesis-subsection h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #7b1fa2;
+  margin: 0 0 12px 0;
+}
+
+.synthesis-content {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 4px;
+  border-left: 3px solid #9c27b0;
+  margin-bottom: 12px;
+}
+
+.synthesis-metadata {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #666;
+  flex-wrap: wrap;
+}
+
+.synthesis-metadata code {
+  background: #e1bee7;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  color: #6a1b9a;
+}
+
+.synthesis-strategy-badge {
+  background: #e1bee7;
+  color: #6a1b9a;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-block;
+  margin-bottom: 12px;
 }
 
 /* Variables section (collapsible) */
@@ -470,3 +567,230 @@
     padding: 12px;
   }
 }
+
+/* ===== LEADERBOARD DISPLAY ===== */
+.leaderboard-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #ffd700, #ffed4e);
+  color: #8b6914;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 8px;
+  box-shadow: 0 2px 4px rgba(255, 215, 0, 0.3);
+}
+
+.variable-item.leaderboard {
+  border-left: 4px solid #ffd700;
+  background: linear-gradient(to right, #fffef7, #ffffff);
+}
+
+.leaderboard-container {
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.leaderboard-header {
+  background: linear-gradient(135deg, #ffd700, #ffed4e);
+  padding: 16px 20px;
+  border-bottom: 2px solid #e6c200;
+}
+
+.leaderboard-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #8b6914;
+  margin-bottom: 8px;
+}
+
+.trophy-icon {
+  font-size: 24px;
+}
+
+.leaderboard-meta {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  color: #8b6914;
+}
+
+.meta-item strong {
+  color: #6b5010;
+}
+
+.leaderboard-content {
+  padding: 16px;
+}
+
+.leaderboard-entry {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #ffffff;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.leaderboard-entry:hover {
+  border-color: #1976d2;
+  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.1);
+}
+
+.leaderboard-entry.rank-1 {
+  background: linear-gradient(to right, #fff9e6, #ffffff);
+  border-color: #ffd700;
+  box-shadow: 0 2px 8px rgba(255, 215, 0, 0.2);
+}
+
+.leaderboard-entry.rank-2 {
+  background: linear-gradient(to right, #f5f5f5, #ffffff);
+  border-color: #c0c0c0;
+}
+
+.leaderboard-entry.rank-3 {
+  background: linear-gradient(to right, #fff4e6, #ffffff);
+  border-color: #cd7f32;
+}
+
+.entry-rank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 60px;
+}
+
+.rank-number {
+  font-size: 20px;
+  font-weight: 700;
+  color: #424242;
+}
+
+.rank-badge {
+  font-size: 28px;
+}
+
+.entry-details {
+  flex: 1;
+}
+
+.entry-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.worker-id {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.model-ref {
+  font-size: 12px;
+  color: #666;
+  background: #f5f5f5;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.entry-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #666;
+  flex-wrap: wrap;
+}
+
+.entry-stats .score {
+  color: #1976d2;
+}
+
+.entry-stats .consensus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.consensus-unanimous {
+  color: #2e7d32;
+}
+
+.consensus-strong {
+  color: #558b2f;
+}
+
+.consensus-moderate {
+  color: #f57c00;
+}
+
+.consensus-weak {
+  color: #d32f2f;
+}
+
+.consensus-unknown {
+  color: #757575;
+}
+
+.entry-stats .positions {
+  color: #999;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.leaderboard-footer {
+  padding: 16px 20px;
+  border-top: 1px solid #e0e0e0;
+  background: #f9f9f9;
+}
+
+.show-metadata-btn {
+  padding: 8px 16px;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.show-metadata-btn:hover {
+  background: #1565c0;
+}
+
+.metadata-json {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 11px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.metadata-json.hidden {
+  display: none;
+}
+
+.leaderboard-empty {
+  padding: 40px;
+  text-align: center;
+  color: #999;
+  font-style: italic;
+}
+
+/* Note: Reducer synthesis styles are now part of .reducer-synthesis-subsection above */

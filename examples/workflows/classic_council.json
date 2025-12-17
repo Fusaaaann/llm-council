@@ -17,31 +17,32 @@
       "description": "Gather initial perspectives from council members",
       "map_phase": {
         "concurrency_limit": 3,
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "gpt5-1",
-            "model_ref": "openai/gpt-5.1",
+            "perspective_id": "gpt5-1",
             "instruction": "Provide a comprehensive, well-reasoned answer. Analyze all relevant aspects thoroughly."
           },
           {
-            "worker_id": "claude",
-            "model_ref": "anthropic/claude-4.5-sonnet",
+            "perspective_id": "claude",
             "instruction": "Provide a balanced, nuanced response that considers multiple perspectives. Identify trade-offs and different viewpoints."
           },
           {
-            "worker_id": "gemini",
-            "model_ref": "google/gemini-2.5-flash-exp",
-            "instruction": "Provide a clear, structured, and accurate answer with logical organization."
+            "perspective_id": "gemini",
+            "instruction": "Provide a clear, structured, and accurate answer with logical organization.",
+            "model_ref": "google/gemini-3-pro-preview"
           }
         ]
       },
       "reduce_phase": {
         "strategy": "simple_summary",
-        "model_ref": "google/gemini-2.5-flash-exp",
+        "model_ref": "google/gemini-3-pro-preview",
         "output_write_to": "stage1_responses",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         }
       }
     },
@@ -49,24 +50,36 @@
       "step_id": "synthesis",
       "description": "Synthesize final answer using chairman",
       "map_phase": {
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "reviewer",
-            "model_ref": "openai/gpt-4",
-            "instruction": "Critically review the perspectives from other models and provide your own thoughtful analysis. Identify strengths, weaknesses, and areas for synthesis."
+            "perspective_id": "reviewer",
+            "instruction": "Critically review the perspectives from other models and provide your own thoughtful analysis. Identify strengths, weaknesses, and areas for synthesis.",
+            "model_ref": "openai/gpt-5.1"
           }
         ]
       },
       "reduce_phase": {
         "strategy": "council_chairman",
-        "model_ref": "openai/gpt-4-turbo",
+        "model_ref": "google/gemini-3-pro-preview",
         "output_write_to": "final_answer",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         },
         "chairman_instructions": "Synthesize the council's perspectives into a comprehensive, accurate, and well-balanced answer. Consider the strengths of each perspective and integrate them into a cohesive response."
       }
     }
+  ],
+  "scope_alignment": {
+    "enabled": true,
+    "coordinator_model": "google/gemini-3-pro-preview"
+  },
+  "models": [
+    "google/gemini-3-pro-preview",
+    "openai/gpt-5.1",
+    "anthropic/claude-4.5-sonnet"
   ]
 }

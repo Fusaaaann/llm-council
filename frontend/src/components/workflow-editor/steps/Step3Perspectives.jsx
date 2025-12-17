@@ -8,20 +8,16 @@ import {
   createPerspectiveFromPreset,
   getRecommendedCombinations
 } from '../utils/perspectivePresets.js';
-
-const MODEL_OPTIONS = [
-  { value: models.GPT4, label: 'GPT-4' },
-  { value: models.GPT4_TURBO, label: 'GPT-4 Turbo' },
-  { value: models.CLAUDE_SONNET, label: 'Claude Sonnet' },
-  { value: models.GEMINI_FLASH, label: 'Gemini Flash' }
-];
+import ModelSelect from '../components/ModelSelect.jsx';
 
 function Step3Perspectives({ state, onChange, onNext, onBack }) {
   const [showPresets, setShowPresets] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState(PRESET_CATEGORIES.GENERAL);
   const [errors, setErrors] = useState({});
+  const [modelBound, setModelBound] = useState(state.modelBound || false);
 
   const perspectives = state.perspectives || [];
+  const globalModels = state.globalModels || [];
 
   const validate = () => {
     const newErrors = {};
@@ -51,14 +47,19 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
 
   const addPerspective = (preset = null) => {
     if (preset) {
-      const newPerspective = createPerspectiveFromPreset(preset.id);
+      const newPerspective = {
+        ...createPerspectiveFromPreset(preset.id),
+        modelBound: modelBound,  // Inherit global model binding setting
+        model: modelBound ? (preset.model || models.GPT4) : null  // Only set model if bound
+      };
       onChange({ perspectives: [...perspectives, newPerspective] });
     } else {
       const newPerspective = {
         id: `perspective_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         name: '',
         role: '',
-        model: models.GPT4
+        modelBound: modelBound,  // Inherit global model binding setting
+        model: modelBound ? models.GPT4 : null  // Only set model if bound
       };
       onChange({ perspectives: [...perspectives, newPerspective] });
       setShowPresets(false);
@@ -72,13 +73,39 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
   const updatePerspective = (index, field, value) => {
     const updated = [...perspectives];
     updated[index][field] = value;
+
+    // If switching to model-neutral, clear model binding
+    if (field === 'modelBound' && !value) {
+      updated[index].model = null;
+    }
+
     onChange({ perspectives: updated });
+  };
+
+  const handleModelBoundChange = (value) => {
+    setModelBound(value);
+
+    // Update all existing perspectives
+    const updated = perspectives.map(p => ({
+      ...p,
+      modelBound: value,
+      model: value ? (p.model || models.GPT4) : null
+    }));
+
+    onChange({
+      modelBound: value,
+      perspectives: updated
+    });
   };
 
   const loadRecommendedCombination = (combination) => {
     const newPerspectives = combination.presets.map(presetId => {
       const preset = PERSPECTIVE_PRESETS.find(p => p.id === presetId);
-      return createPerspectiveFromPreset(preset.id);
+      return {
+        ...createPerspectiveFromPreset(preset.id),
+        modelBound: modelBound,
+        model: modelBound ? (preset.model || models.GPT4) : null
+      };
     });
     onChange({ perspectives: newPerspectives });
     setShowPresets(false);
@@ -89,11 +116,60 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
       <div className="step-header">
         <h2>Step 3: Choose Delegates & Perspectives</h2>
         <p className="step-description">
-          Set up the AI delegates you want to "hire" for this workflow. Each delegate is a specialized perspective that proposes its own answer.
+          Choose the AI perspectives that will analyze the problem.
         </p>
       </div>
 
       <div className="step-content">
+        {/* Q2.3: Model Binding Toggle */}
+        <div className="question-card">
+          <div className="question-header">
+            <h3>Model Selection</h3>
+            <span className="required-badge">Required</span>
+          </div>
+          <p className="question-description">
+            Choose whether all models analyze each perspective, or bind specific models.
+          </p>
+
+          <div className="radio-group">
+            <label className={!modelBound ? 'active' : ''}>
+              <input
+                type="radio"
+                name="modelBound"
+                checked={!modelBound}
+                onChange={() => handleModelBoundChange(false)}
+              />
+              <div className="radio-content">
+                <strong>All models (Recommended)</strong>
+                <p className="radio-description">
+                  {globalModels.length} × {perspectives.length || 0} = {globalModels.length * (perspectives.length || 0)} analyses
+                </p>
+                <div className="benefit-badge">✓ Maximum diversity</div>
+              </div>
+            </label>
+
+            <label className={modelBound ? 'active' : ''}>
+              <input
+                type="radio"
+                name="modelBound"
+                checked={modelBound}
+                onChange={() => handleModelBoundChange(true)}
+              />
+              <div className="radio-content">
+                <strong>Bind specific models</strong>
+                <p className="radio-description">
+                  Control which model analyzes each perspective
+                </p>
+                <div className="benefit-badge">✓ Precise control</div>
+              </div>
+            </label>
+          </div>
+
+          {errors.modelBinding && (
+            <span className="error-message">{errors.modelBinding}</span>
+          )}
+        </div>
+
         {/* Recommended Combinations */}
         {perspectives.length === 0 && (
           <div className="recommended-combinations">
@@ -142,7 +218,9 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
                   <div className="preset-info">
                     <h4>{preset.name}</h4>
                     <p>{preset.role}</p>
-                    <span className="preset-model">{MODEL_OPTIONS.find(m => m.value === preset.model)?.label}</span>
+                    <span className="preset-model">
+                      {(state.globalModels || []).find(m => m.modelRef === preset.model)?.label || preset.model}
+                    </span>
                   </div>
                   <button onClick={() => addPerspective(preset)} className="btn-add">
                     Add
@@ -185,19 +263,35 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
                     )}
                   </div>
 
-                  <div className="form-group">
-                    <label>Model</label>
-                    <select
+                  {/* Model selector - ONLY show if modelBound=true
+                      DSL Mapping:
+                      - modelBound=true + model='openai/gpt-4o' → { ..., model_ref: 'openai/gpt-4o' }
+                      - modelBound=false + model=null → { ... } (NO model_ref, all models analyze)
+                  */}
+                  {modelBound ? (
+                    <ModelSelect
                       value={perspective.model}
-                      onChange={(e) => updatePerspective(index, 'model', e.target.value)}
-                    >
-                      {MODEL_OPTIONS.map(option => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                      onChange={(modelRef) => {
+                        updatePerspective(index, 'modelBound', true);
+                        updatePerspective(index, 'model', modelRef);
+                      }}
+                      globalModels={state.globalModels}
+                      label="Model *"
+                    />
+                  ) : (
+                    <div className="form-group">
+                      <label>Model</label>
+                      <div className="model-neutral-badge">
+                        <span className="badge-icon">🌐</span>
+                        <div className="badge-content">
+                          <strong>All models ({globalModels.length})</strong>
+                          <p className="badge-hint">
+                            Models: {globalModels.map(m => m.label || m.modelRef).join(', ')}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="form-group full-width">
                     <label>Delegate Instructions (Role & Focus) *</label>
@@ -209,7 +303,7 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
                       className={errors[`role_${index}`] ? 'error' : ''}
                     />
                     <span className="help-text">
-                      This becomes the role definition for a worker in the workflow (how this delegate thinks about the problem).
+                      How this perspective approaches the problem.
                     </span>
                     {errors[`role_${index}`] && (
                       <span className="error-message">{errors[`role_${index}`]}</span>
@@ -222,12 +316,7 @@ function Step3Perspectives({ state, onChange, onNext, onBack }) {
         )}
 
         <div className="info-box">
-          <strong>💡 Tip:</strong> Good delegate setups are:
-          <ul>
-            <li><strong>Complementary:</strong> Each delegate adds something unique (e.g., risk, upside, feasibility)</li>
-            <li><strong>Balanced:</strong> Include opposing views (pros/cons, technical/business)</li>
-            <li><strong>Relevant:</strong> Match delegates to your actual decision (e.g., legal, finance, security)</li>
-          </ul>
+          <strong>💡 Tip:</strong> Use complementary perspectives with diverse viewpoints.
         </div>
       </div>
 

@@ -12,21 +12,21 @@
       "step_id": "gather_responses",
       "description": "Collect responses from multiple models",
       "map_phase": {
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "model_a",
-            "model_ref": "openai/gpt-4",
-            "instruction": "Answer the user's question comprehensively and accurately."
+            "perspective_id": "model_a",
+            "instruction": "Answer the user's question comprehensively and accurately.",
+            "model_ref": "openai/gpt-4"
           },
           {
-            "worker_id": "model_b",
-            "model_ref": "anthropic/claude-3.5-sonnet",
-            "instruction": "Answer the user's question comprehensively and accurately."
+            "perspective_id": "model_b",
+            "instruction": "Answer the user's question comprehensively and accurately.",
+            "model_ref": "anthropic/claude-3.5-sonnet"
           },
           {
-            "worker_id": "model_c",
-            "model_ref": "google/gemini-2.0-flash-exp",
-            "instruction": "Answer the user's question comprehensively and accurately."
+            "perspective_id": "model_c",
+            "instruction": "Answer the user's question comprehensively and accurately.",
+            "model_ref": "google/gemini-2.0-flash-exp"
           }
         ]
       },
@@ -36,7 +36,10 @@
         "output_write_to": "final_answer",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": true
+          "mask_worker_identities": true,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         },
         "chairman_instructions": "Evaluate the responses without knowing which model produced them. Focus purely on the quality, accuracy, and completeness of the content. Synthesize the best aspects of each response into a comprehensive final answer."
       }

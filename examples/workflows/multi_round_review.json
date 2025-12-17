@@ -1,0 +1,162 @@
+{
+  "flow_id": "multi_round_review",
+  "description": "Multi-round iterative refinement with peer review at each stage",
+  "global_timeout_ms": 300000,
+  "models": [
+    "openai/gpt-4o",
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.0-flash-exp"
+  ],
+  "variables": [
+    {
+      "name": "round1_proposals",
+      "type": "string"
+    },
+    {
+      "name": "round1_rankings",
+      "type": "json_object"
+    },
+    {
+      "name": "round2_refinements",
+      "type": "string"
+    },
+    {
+      "name": "round2_rankings",
+      "type": "json_object"
+    },
+    {
+      "name": "final_answer",
+      "type": "string"
+    }
+  ],
+  "supersteps": [
+    {
+      "step_id": "step1_initial_proposals",
+      "description": "Round 1: Initial solution proposals",
+      "map_phase": {
+        "perspectives": [
+          {
+            "perspective_id": "solution_architect",
+            "instruction": "Propose a solution architecture. Focus on system design, scalability, and maintainability."
+          },
+          {
+            "perspective_id": "implementation_engineer",
+            "instruction": "Propose an implementation approach. Focus on practical execution, tooling, and development workflow."
+          }
+        ],
+        "concurrency_limit": 6
+      },
+      "reduce_phase": {
+        "strategy": "concat_all_outputs",
+        "output_write_to": "round1_proposals",
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
+        }
+      }
+    },
+    {
+      "superstep_type": "score_and_rank",
+      "step_id": "step2_round1_review",
+      "description": "Round 1: Peer review of initial proposals",
+      "evaluator_models": [
+        "openai/gpt-4o",
+        "anthropic/claude-3.5-sonnet",
+        "google/gemini-2.0-flash-exp"
+      ],
+      "ranking_instructions": "Evaluate proposals based on:\n1. Technical soundness and feasibility\n2. Completeness of solution\n3. Consideration of edge cases and risks\n4. Clarity of explanation\n\nRank from best to worst.",
+      "visibility": {
+        "include_original_input": true,
+        "include_conversation_history": false,
+        "mask_worker_identities": true,
+        "include_supersteps": ["latest"]
+      },
+      "ranking_algorithm": "borda_count",
+      "output_format": "full",
+      "output_write_to": "round1_rankings",
+      "require_complete_rankings": true
+    },
+    {
+      "step_id": "step3_refinements",
+      "description": "Round 2: Refine proposals based on peer review",
+      "map_phase": {
+        "perspectives": [
+          {
+            "perspective_id": "solution_architect",
+            "instruction": "Refine your solution architecture based on the peer review feedback. Address identified weaknesses and incorporate insights from top-ranked proposals."
+          },
+          {
+            "perspective_id": "implementation_engineer",
+            "instruction": "Refine your implementation approach based on the peer review feedback. Address identified weaknesses and incorporate insights from top-ranked proposals."
+          }
+        ],
+        "concurrency_limit": 6,
+        "global_instruction_overlay": "Review the peer rankings and feedback from Round 1. Improve your proposal by:\n1. Addressing weaknesses identified by reviewers\n2. Incorporating strengths from higher-ranked proposals\n3. Adding missing considerations\n\nPrevious Round Rankings:\n${round1_rankings}"
+      },
+      "reduce_phase": {
+        "strategy": "concat_all_outputs",
+        "output_write_to": "round2_refinements",
+        "variable_interpolation": true,
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
+        }
+      }
+    },
+    {
+      "superstep_type": "score_and_rank",
+      "step_id": "step4_round2_review",
+      "description": "Round 2: Peer review of refined proposals",
+      "evaluator_models": [
+        "openai/gpt-4o",
+        "anthropic/claude-3.5-sonnet",
+        "google/gemini-2.0-flash-exp",
+        "x-ai/grok-2-1212"
+      ],
+      "ranking_instructions": "Evaluate refined proposals based on:\n1. Improvement over Round 1 (based on feedback incorporation)\n2. Technical soundness and completeness\n3. Practical feasibility\n4. Overall quality\n\nRank from best to worst.",
+      "visibility": {
+        "include_original_input": true,
+        "include_conversation_history": false,
+        "mask_worker_identities": true,
+        "include_supersteps": ["latest"]
+      },
+      "ranking_algorithm": "schulze",
+      "output_format": "leaderboard",
+      "output_write_to": "round2_rankings",
+      "require_complete_rankings": false
+    },
+    {
+      "step_id": "step5_final_synthesis",
+      "description": "Synthesize final answer from highest-ranked proposals",
+      "map_phase": {
+        "perspectives": [
+          {
+            "perspective_id": "chief_architect",
+            "instruction": "Synthesize the final comprehensive solution.",
+            "model_ref": "anthropic/claude-3.5-sonnet"
+          }
+        ]
+      },
+      "reduce_phase": {
+        "strategy": "council_chairman",
+        "model_ref": "anthropic/claude-3.5-sonnet",
+        "output_write_to": "final_answer",
+        "variable_interpolation": true,
+        "visibility": {
+          "include_original_input": true,
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
+        },
+        "chairman_instructions": "Create a comprehensive final solution that:\n1. Synthesizes the best elements from the highest-ranked Round 2 proposals\n2. Shows clear improvement trajectory from Round 1 to Round 2\n3. Addresses all evaluation criteria from both rounds\n4. Provides a complete, actionable solution\n\nRound 1 Results:\n${round1_rankings}\n\nRound 2 Results (Final):\n${round2_rankings}"
+      }
+    }
+  ]
+}

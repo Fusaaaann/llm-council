@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getDefaultModels } from '../utils/defaultModels.js';
 
 const OUTPUT_FORMATS = [
   { value: 'text_summary', label: 'Text Summary', description: 'Clear written answer in paragraph form' },
@@ -20,6 +21,9 @@ const QUALITY_OPTIONS = [
 
 function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
   const [newConstraint, setNewConstraint] = useState('');
+  const [showModelConfig, setShowModelConfig] = useState(false);
+  const [newModelLabel, setNewModelLabel] = useState('');
+  const [newModelRef, setNewModelRef] = useState('');
 
   const toggleQuality = (quality) => {
     const qualities = state.qualities || [];
@@ -42,12 +46,36 @@ function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
     onChange({ constraints: constraints.filter((_, i) => i !== index) });
   };
 
+  const addCustomModel = () => {
+    if (!newModelLabel.trim() || !newModelRef.trim()) {
+      alert('Both display name and model ID are required');
+      return;
+    }
+
+    const globalModels = state.globalModels || getDefaultModels();
+    const newModel = {
+      id: `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      label: newModelLabel.trim(),
+      modelRef: newModelRef.trim(),
+      isDefault: false
+    };
+
+    onChange({ globalModels: [...globalModels, newModel] });
+    setNewModelLabel('');
+    setNewModelRef('');
+  };
+
+  const removeModel = (index) => {
+    const globalModels = state.globalModels || [];
+    onChange({ globalModels: globalModels.filter((_, i) => i !== index) });
+  };
+
   return (
     <div className="wizard-step step-success-criteria">
       <div className="step-header">
         <h2>Step 2: Define the Final Answer & Rules</h2>
         <p className="step-description">
-          Specify what the final answer should look like and what rules it must follow. This shapes the workflow's output variable and instructions.
+          Specify the answer format and quality rules.
         </p>
       </div>
 
@@ -56,7 +84,7 @@ function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
         <div className="form-group">
           <label>What should the final answer look like?</label>
           <span className="help-text">
-            This defines the format of the workflow's final output (text, structured JSON, ranked list, etc.).
+            Format of the workflow's final output.
           </span>
           <div className="radio-group">
             {OUTPUT_FORMATS.map(format => (
@@ -95,7 +123,7 @@ function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
         <div className="form-group">
           <label>Key qualities for the final answer (select all that apply):</label>
           <span className="help-text">
-            These guide how delegates reason and how the final collector judges the best answer.
+            Guides how perspectives reason and decide.
           </span>
           <div className="checkbox-grid">
             {QUALITY_OPTIONS.map(quality => (
@@ -118,7 +146,7 @@ function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
         <div className="form-group">
           <label>Hard rules the final answer must follow (optional):</label>
           <span className="help-text">
-            These are strict requirements the answer MUST satisfy (e.g., "Must not violate GDPR", "Must be valid JSON", "Under 500 words").
+            Strict requirements the answer must satisfy.
           </span>
 
           <div className="constraint-input">
@@ -149,6 +177,76 @@ function Step2SuccessCriteria({ state, onChange, onNext, onBack }) {
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+
+        {/* Global Model Configuration */}
+        <div className="form-group">
+          <label>
+            Available Models
+            <span className="optional"> (optional - customize model library)</span>
+          </label>
+          <button
+            onClick={() => setShowModelConfig(!showModelConfig)}
+            className="btn-link"
+            type="button"
+          >
+            {showModelConfig ? '− Hide Model Configuration' : '+ Customize Model Library'}
+          </button>
+
+          {showModelConfig && (
+            <div className="model-configuration-panel">
+              <p className="help-text">
+                Configure available models. Defaults are always included.
+              </p>
+
+              {/* Model List */}
+              <div className="models-list">
+                {(state.globalModels || getDefaultModels()).map((model, index) => (
+                  <div key={model.id} className="model-item">
+                    <div className="model-info">
+                      <strong>{model.label}</strong>
+                      <code className="model-ref">{model.modelRef}</code>
+                      {model.isDefault && <span className="badge-default">Default</span>}
+                    </div>
+                    <button
+                      onClick={() => removeModel(index)}
+                      className="btn-remove"
+                      disabled={model.isDefault}
+                      title={model.isDefault ? 'Cannot remove default models' : 'Remove model'}
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add Custom Model */}
+              <div className="add-model-form">
+                <h4>Add Custom Model</h4>
+                <div className="form-row">
+                  <input
+                    type="text"
+                    placeholder="Display Name (e.g., 'Custom GPT-4')"
+                    value={newModelLabel}
+                    onChange={(e) => setNewModelLabel(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Model ID (e.g., 'openai/gpt-4')"
+                    value={newModelRef}
+                    onChange={(e) => setNewModelRef(e.target.value)}
+                  />
+                  <button onClick={addCustomModel} className="btn-secondary" type="button">
+                    + Add Model
+                  </button>
+                </div>
+                <span className="help-text">
+                  Find model IDs at <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">OpenRouter Models</a>
+                </span>
+              </div>
+            </div>
           )}
         </div>
       </div>

@@ -18,31 +18,33 @@
       "map_phase": {
         "concurrency_limit": 3,
         "global_instruction_overlay": "Workflow Purpose: Research Synthesis & Analysis\n\nContext: Academic researchers and analysts requiring rigorous literature synthesis\n\nPriorities: accurate, comprehensive, methodologically sound\n\nConstraints: Must cite evidence, identify gaps, maintain objectivity",
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "methodology_reviewer",
-            "model_ref": "openai/gpt-4-turbo",
-            "instruction": "Evaluate research methodologies, experimental designs, and statistical validity. Identify methodological strengths and limitations."
+            "perspective_id": "methodology_reviewer",
+            "instruction": "Evaluate research methodologies, experimental designs, and statistical validity. Identify methodological strengths and limitations.",
+            "model_ref": "openai/gpt-5.1"
           },
           {
-            "worker_id": "findings_synthesizer",
-            "model_ref": "anthropic/claude-3.5-sonnet",
-            "instruction": "Extract and synthesize key findings, patterns, and insights. Identify consensus areas and contradictions in the literature."
+            "perspective_id": "findings_synthesizer",
+            "instruction": "Extract and synthesize key findings, patterns, and insights. Identify consensus areas and contradictions in the literature.",
+            "model_ref": "google/gemini-3-pro-preview"
           },
           {
-            "worker_id": "gap_analyst",
-            "model_ref": "google/gemini-2.0-flash-exp",
+            "perspective_id": "gap_analyst",
             "instruction": "Identify research gaps, unanswered questions, and areas requiring further investigation. Suggest future research directions."
           }
         ]
       },
       "reduce_phase": {
         "strategy": "simple_summary",
-        "model_ref": "anthropic/claude-3.5-sonnet",
+        "model_ref": "openai/gpt-5.1",
         "output_write_to": "literature_review",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         }
       }
     },
@@ -50,24 +52,31 @@
       "step_id": "critical_synthesis",
       "description": "Critical synthesis of reviewed literature",
       "map_phase": {
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "critical_analyst",
-            "model_ref": "openai/gpt-4-turbo",
+            "perspective_id": "critical_analyst",
             "instruction": "Critically synthesize the literature review into coherent themes. Challenge assumptions and evaluate theoretical frameworks."
           }
         ]
       },
       "reduce_phase": {
         "strategy": "council_chairman",
-        "model_ref": "openai/gpt-4-turbo",
+        "model_ref": "google/gemini-3-pro-preview",
         "output_write_to": "synthesized_findings",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         },
         "chairman_instructions": "Produce a comprehensive research synthesis with:\n\n1. Executive Summary (key findings in 2-3 paragraphs)\n2. Main Themes & Patterns (organized by topic)\n3. Methodological Considerations (quality assessment)\n4. Areas of Consensus vs. Debate\n5. Research Gaps & Future Directions\n6. Practical Implications (if applicable)\n7. References to Key Studies\n\nMaintain academic rigor and objectivity throughout."
       }
     }
+  ],
+  "models": [
+    "openai/gpt-5.1",
+    "google/gemini-3-pro-preview",
+    "xai/grok-4"
   ]
 }

@@ -10,6 +10,7 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 - **Stage 1.5 Cross-Interrogation**: Models question each other's responses to uncover deeper insights
 - **Anonymized Peer Review**: Stage 2 uses anonymous labels (Response A, B, C) to prevent bias
 - **Configuration-Driven Architecture**: Dynamic event handling eliminates hardcoded logic
+- **Scope Alignment System**: 4-phase pre-execution process prevents role drift in workflow execution
 
 ### Core Features
 - **Streaming responses**: Progressive display via Server-Sent Events (SSE)
@@ -73,7 +74,9 @@ LLM Council is a **3.5-stage deliberation system** where multiple LLMs collabora
 ### Workflow System
 - [Workflow Model Requests](ai_notes/WORKFLOW_MODEL_REQUESTS.md) - How workflows request LLM models
 - [Workflow Quick Reference](ai_notes/WORKFLOW_QUICK_REFERENCE.md) - Quick guide for workflow developers
+- [Score & Rank Guide](ai_notes/SCORE_AND_RANK_GUIDE.md) - Anonymous peer review and ranking
 - [Unified Stage Architecture](ai_notes/UNIFIED_STAGE_ARCHITECTURE.md) - Dual-mode rendering system
+- [Scope Alignment Architecture](ai_notes/SCOPE_ALIGNMENT_ARCHITECTURE.md) - Role drift prevention system
 
 ### Security
 - [Security Implementation](ai_notes/SECURITY_IMPLEMENTATION.md) - Full security hardening
@@ -218,10 +221,42 @@ See [Storage Architecture](ai_notes/STORAGE_ARCHITECTURE.md#encryption-encryptio
 
 See [Backend Architecture](ai_notes/BACKEND_ARCHITECTURE.md#progressive-message-building) for details.
 
+### Scope Alignment (Workflow System)
+**Problem:** Multi-agent workflows suffer from role drift, responsibility overlaps, and coverage gaps.
+
+**Solution:** 4-phase pre-execution system:
+- **Phase 1**: Each agent defines its operational contract
+- **Phase 2**: Meta-agent resolves conflicts and creates final responsibility map
+- **Phase 3**: Execution with refined scopes
+- **Phase 4**: Post-execution audit (future)
+
+**How It Works:**
+- Runs **silently** before workflow execution
+- Injects refined scope into worker instructions
+- Falls back gracefully if alignment fails
+
+**Configuration:**
+```json
+{
+  "scope_alignment": {
+    "enabled": true,
+    "coordinator_model": "openai/gpt-4o"
+  }
+}
+```
+
+**Benefits:**
+- Prevents role drift during execution
+- Eliminates responsibility overlaps
+- Fills coverage gaps
+- Improves output quality
+
+See [Scope Alignment Architecture](ai_notes/SCOPE_ALIGNMENT_ARCHITECTURE.md) for details.
+
 ## Important Implementation Details
 
-### Relative Imports
-All backend modules use relative imports (`from .config import ...`) not absolute. Critical for `python -m backend.main` to work.
+### Module Imports
+All backend modules use absolute imports (`from backend.config import ...`) not relative. Critical for `python -m backend.main` to work.
 
 ### Port Configuration
 - Backend: **8003** (changed to avoid conflicts)
@@ -246,14 +281,31 @@ All ReactMarkdown components must be wrapped in `<div className="markdown-conten
 
 See [Changelog](ai_notes/CHANGELOG.md) for detailed update history.
 
-**Latest (2025-12-09):**
+**Latest (2025-12-15):**
+- 🏆 **Score & Rank Superstep** - Anonymous peer review and ranking as special superstep type
+- 📊 **Multiple Ranking Algorithms** - Average position, Borda count, ranked pairs, Schulze method
+- 🎨 **Leaderboard Display** - Frontend shows rankings with badges, consensus indicators
+- 🛠️ **Shared Ranking Utilities** - Council.py refactored to use common ranking functions
+
+**2025-12-11:**
+- 🔀 **DSL Unification** - Unified workers/perspective_matrix into single `perspectives` concept
+- 🎯 **Model-Neutral by Default** - Perspectives apply to all models unless explicitly bound to specific model
+- 📊 **Column-Wise Reduction** - New reducer strategy compares models per-perspective instead of global synthesis
+- 🔧 **Migration Tool** - Automated migration script for existing workflows
+
+**2025-12-10:**
+- 🎯 **Scope Alignment System** - 4-phase pre-execution process prevents role drift in workflows
+- 📋 **Operational Contracts** - Workers receive clear responsibility boundaries before execution
+- 🔍 **Meta-Coordination** - Automated conflict detection and gap filling
+
+**2025-12-09:**
 - 🎨 **Unified Stage Architecture** - Single adaptive component for council and workflow execution
 - 🔄 **Workflow UI Support** - Variable-based display with progress tracking
 - 🛠️ **Workflow Partial State Saving** - Backend now saves workflow variables incrementally
 
 **2025-12-08:**
 - 🗄️ **SQLite Migration** - Migrated core storage from JSON to SQLite
-- 📊 **Ranking Algorithms** - Added perspective matrix and advanced ranking
+- 📊 **Ranking Algorithms** - Advanced ranking algorithms
 
 **2025-12-02:**
 - 🔄 **Token Refresh Race Condition Fix** - Module-level lock prevents duplicate refresh attempts
@@ -320,4 +372,4 @@ Store implementation details in [ai_notes/](ai_notes/) with descriptive filename
 - [frontend/src/storage/README.md](frontend/src/storage/README.md) - Local-first storage guide
 - `.env.example` - Configuration documentation
 
-**Last Major Update:** 2025-12-09 (Unified Stage Architecture - Workflow UI support)
+**Last Major Update:** 2025-12-10 (Scope Alignment System - Role drift prevention)

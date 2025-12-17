@@ -15,7 +15,9 @@ They accept the same inputs (stage2_results, label_to_model) and return the same
 
 from typing import List, Dict, Any
 from collections import defaultdict
-import re
+
+# Import parse_ranking_from_text from ranking_utils (canonical source)
+from backend.ranking_utils import parse_ranking_from_text
 
 
 def ranked_pairs(rankings: List[List[str]]) -> List[str]:
@@ -237,40 +239,6 @@ def borda_count(rankings: List[List[str]]) -> List[str]:
     return result
 
 
-def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    """
-    Parse the FINAL RANKING section from the model's response.
-
-    This is a copy of the function from council.py to make the algorithms
-    self-contained and drop-in compatible.
-
-    Args:
-        ranking_text: The full text response from the model
-
-    Returns:
-        List of response labels in ranked order (e.g., ["Response A", "Response B", ...])
-    """
-    # Look for "FINAL RANKING:" section
-    if "FINAL RANKING:" in ranking_text:
-        # Extract everything after "FINAL RANKING:"
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            # Try to extract numbered list format (e.g., "1. Response A")
-            numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
-            if numbered_matches:
-                # Extract just the "Response X" part
-                return [re.search(r'Response [A-Z]', m).group() for m in numbered_matches]
-
-            # Fallback: Extract all "Response X" patterns in order
-            matches = re.findall(r'Response [A-Z]', ranking_section)
-            return matches
-
-    # Fallback: try to find any "Response X" patterns in order
-    matches = re.findall(r'Response [A-Z]', ranking_text)
-    return matches
-
-
 def calculate_aggregate_rankings_ranked_pairs(
     stage2_results: List[Dict[str, Any]],
     label_to_model: Dict[str, str]
@@ -428,99 +396,3 @@ def compare_methods_with_stage2_data(
     }
 
 
-# Example usage and testing
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Example 1: Simple rankings with list of lists")
-    print("=" * 60)
-
-    # Example: 3 voters ranking 4 candidates
-    test_rankings = [
-        ["A", "C", "B", "D"],  # Voter 1: A > C > B > D
-        ["B", "A", "C", "D"],  # Voter 2: B > A > C > D
-        ["C", "B", "A", "D"],  # Voter 3: C > B > A > D
-    ]
-
-    print("\nTest Rankings:")
-    for i, ranking in enumerate(test_rankings, 1):
-        print(f"  Voter {i}: {' > '.join(ranking)}")
-    print()
-
-    results = compare_methods(test_rankings)
-
-    print("Results:")
-    print(f"  Ranked Pairs:  {' > '.join(results['ranked_pairs'])}")
-    print(f"  Schulze:       {' > '.join(results['schulze'])}")
-    print(f"  Borda Count:   {' > '.join(results['borda_count'])}")
-
-    print("\n" + "=" * 60)
-    print("Example 2: Stage2 data format (drop-in compatible)")
-    print("=" * 60)
-
-    # Simulate stage2_results format from council.py
-    stage2_results = [
-        {
-            "model": "openai/gpt-4",
-            "ranking": """
-            FINAL RANKING:
-            1. Response A
-            2. Response C
-            3. Response B
-            """
-        },
-        {
-            "model": "anthropic/claude-3",
-            "ranking": """
-            FINAL RANKING:
-            1. Response B
-            2. Response A
-            3. Response C
-            """
-        },
-        {
-            "model": "google/gemini-pro",
-            "ranking": """
-            FINAL RANKING:
-            1. Response C
-            2. Response B
-            3. Response A
-            """
-        }
-    ]
-
-    label_to_model = {
-        "Response A": "openai/gpt-4-turbo",
-        "Response B": "anthropic/claude-3-opus",
-        "Response C": "google/gemini-ultra"
-    }
-
-    print("\nStage 2 Rankings:")
-    for result in stage2_results:
-        parsed = parse_ranking_from_text(result['ranking'])
-        print(f"  {result['model']}: {' > '.join(parsed)}")
-    print()
-
-    stage2_comparison = compare_methods_with_stage2_data(stage2_results, label_to_model)
-
-    print("Results (with model names):")
-    for method_name, rankings in stage2_comparison.items():
-        print(f"\n  {method_name.replace('_', ' ').title()}:")
-        for entry in rankings:
-            print(f"    {entry['rank']}. {entry['model']}")
-
-    print("\n" + "=" * 60)
-    print("To use as drop-in replacement in council.py:")
-    print("=" * 60)
-    print("""
-    # Instead of:
-    from .council import calculate_aggregate_rankings
-    aggregate = calculate_aggregate_rankings(stage2_results, label_to_model)
-
-    # Use:
-    from .ranking_algorithms import calculate_aggregate_rankings_schulze
-    aggregate = calculate_aggregate_rankings_schulze(stage2_results, label_to_model)
-
-    # Or compare all three:
-    from .ranking_algorithms import compare_methods_with_stage2_data
-    all_methods = compare_methods_with_stage2_data(stage2_results, label_to_model)
-    """)

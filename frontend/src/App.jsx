@@ -23,6 +23,7 @@ function App() {
   const [inviteToken, setInviteToken] = useState(null);
   const [currentView, setCurrentView] = useState('private');
   const [reconnectionStatus, setReconnectionStatus] = useState(null); // { attempt, maxAttempts, delay }
+  const [errorMessage, setErrorMessage] = useState(null); // Error message to display in UI
 
   // Query state management
   const queryState = useQueryState();
@@ -618,6 +619,9 @@ function App() {
   const handleSendMessage = async (content, skipAddingUserMessage = false) => {
     if (!currentConversationId) return;
 
+    // Clear any previous error messages
+    setErrorMessage(null);
+
     // Create abort controller for cancellation
     const controller = new AbortController();
     setAbortController(controller);
@@ -731,6 +735,7 @@ function App() {
 
             case SPECIAL_EVENTS.ERROR:
               console.error('Stream error:', event.message);
+              setErrorMessage(event.message || 'An error occurred during execution');
               queryState.cancelQuery(currentConversationId);
               setIsLoading(false);
               setAbortController(null);
@@ -855,6 +860,7 @@ function App() {
           onUpdateModels={handleUpdateModels}
           isLoading={isLoading}
           queryState={currentConversationId ? queryState.getQueryState(currentConversationId) : null}
+          errorMessage={errorMessage}
           isReadOnly={
             // Read-only if: viewing public forum AND conversation doesn't belong to current user
             currentView === 'public' &&

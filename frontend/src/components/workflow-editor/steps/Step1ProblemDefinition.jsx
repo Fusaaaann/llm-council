@@ -25,14 +25,14 @@ function Step1ProblemDefinition({ state, onChange, onNext }) {
       <div className="step-header">
         <h2>Step 1: Define Your Workflow Pattern</h2>
         <p className="step-description">
-          Define the <strong>type of problem</strong> this workflow handles. Think of it as designing an intelligence architecture, not solving a specific task. Users will provide specific questions at runtime.
+          Define what <strong>type of problem</strong> this workflow solves.
         </p>
       </div>
 
       <div className="step-content">
         <div className="form-group">
           <label htmlFor="problemStatement">
-            What type of problem or decision pattern does this workflow address?
+            What problem does this workflow solve?
             <span className="required">*</span>
           </label>
           <textarea
@@ -47,13 +47,13 @@ function Step1ProblemDefinition({ state, onChange, onNext }) {
             <span className="error-message">{errors.problemStatement}</span>
           )}
           <span className="help-text">
-            This defines the workflow's <strong>purpose and pattern</strong>, not a specific question. Users provide specific queries when they execute the workflow. We'll also use this to auto-generate a workflow ID.
+            Describes the workflow's purpose. Specific questions come at runtime.
           </span>
         </div>
 
         <div className="form-group">
           <label htmlFor="audience">
-            What context or scope does this workflow operate in?
+            Context or scope?
             <span className="optional">(optional)</span>
           </label>
           <input
@@ -64,22 +64,16 @@ function Step1ProblemDefinition({ state, onChange, onNext }) {
             placeholder="Example: Technical stakeholders requiring deep analysis, Executive decision-makers needing concise summaries"
           />
           <span className="help-text">
-            Describe the typical context, audience level, or domain scope. This helps set the tone and depth for all executions of this workflow.
+            Sets the tone and depth for workflow execution.
           </span>
         </div>
 
         <div className="info-box">
-          <strong>💡 Design Reusable Patterns:</strong>
+          <strong>💡 Examples:</strong>
           <ul>
-            <li><strong>✅ Good:</strong> "Technology Migration Decision Framework" → Users ask: "Should we migrate from PostgreSQL to MongoDB?"</li>
-            <li><strong>❌ Bad:</strong> "Should we migrate from PostgreSQL to MongoDB?" (too specific, not reusable)</li>
-            <li><strong>✅ Good:</strong> "Strategic Planning & Recommendations" → Users ask: "What should our Q4 marketing strategy be?"</li>
-            <li><strong>❌ Bad:</strong> "Q4 Marketing Strategy" (one-off task, not a pattern)</li>
-            <li><strong>✅ Good:</strong> "Research Synthesis & Analysis" → Users ask: "Summarize the key findings from this paper"</li>
+            <li><strong>✅ Good:</strong> "Technology Migration Framework"</li>
+            <li><strong>❌ Bad:</strong> "Should we migrate to MongoDB?" (too specific)</li>
           </ul>
-          <div style={{ marginTop: '10px', fontStyle: 'italic' }}>
-            Think: "What <strong>category of problems</strong> will this workflow solve repeatedly?" not "What specific question am I solving today?"
-          </div>
         </div>
       </div>
 

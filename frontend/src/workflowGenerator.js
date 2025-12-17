@@ -125,6 +125,36 @@ class SuperstepBuilder {
   }
 
   /**
+   * Add perspectives to the map phase (NEW - model-neutral by default)
+   * @param {Array<{perspective_id: string, instruction: string, model_ref?: string}>} perspectives
+   */
+  withPerspectives(perspectives) {
+    this.superstep.map_phase.perspectives = perspectives.map(p => {
+      const perspective = {
+        perspective_id: p.perspective_id,
+        instruction: p.instruction
+      };
+      // Only add model_ref if explicitly specified (model-bound perspective)
+      if (p.model_ref) {
+        perspective.model_ref = p.model_ref;
+      }
+      return perspective;
+    });
+    // Remove workers if perspectives are set (DSL uses one or the other, not both)
+    delete this.superstep.map_phase.workers;
+    return this;
+  }
+
+  /**
+   * Set concurrency limit for parallel execution
+   * @param {number} limit - Max number of concurrent workers
+   */
+  withConcurrencyLimit(limit) {
+    this.superstep.map_phase.concurrency_limit = limit;
+    return this;
+  }
+
+  /**
    * Add middleware to the superstep
    * @param {Array<{op: string, apply_to: string[], config: object}>} middlewares
    */
@@ -297,10 +327,10 @@ export const strategies = {
 
 /**
  * Common model references
+ *
+ * DEVELOPERS: To modify the default model list, edit:
+ * frontend/src/components/workflow-editor/utils/defaultModels.js
+ *
+ * This re-export maintains backward compatibility.
  */
-export const models = {
-  GPT4: 'openai/gpt-4',
-  GPT4_TURBO: 'openai/gpt-4-turbo',
-  CLAUDE_SONNET: 'anthropic/claude-3.5-sonnet',
-  GEMINI_FLASH: 'google/gemini-2.0-flash-exp'
-};
+export { models } from './components/workflow-editor/utils/defaultModels.js';

@@ -67,10 +67,18 @@ export function getFinalOutput(message) {
     const lastVar = varNames[varNames.length - 1];
     const content = variables[lastVar];
 
-    // Convert to string if needed
+    // Return string content as-is
     if (typeof content === 'string') {
       return content;
     }
+
+    // Check if content is a leaderboard object
+    if (content && typeof content === 'object' && 'leaderboard' in content && Array.isArray(content.leaderboard)) {
+      // Return leaderboard object with type indicator
+      return { type: 'leaderboard', data: content };
+    }
+
+    // For other objects, stringify them
     return JSON.stringify(content, null, 2);
   }
 
@@ -139,6 +147,7 @@ export function getDisplayData(message) {
       mode: EXECUTION_MODE.WORKFLOW,
       variables: message.variables || {},
       workerOutputs: message.worker_outputs || {},
+      superstepResults: message.superstep_results || [],
       metadata: message.metadata || null,
       isComplete: isMessageComplete(message),
       finalOutput: getFinalOutput(message)
@@ -149,4 +158,189 @@ export function getDisplayData(message) {
     mode: EXECUTION_MODE.UNKNOWN,
     isComplete: false
   };
+}
+
+/**
+ * Schema-Neutral Structured Data Detection
+ *
+ * These utilities determine if a value should be rendered with the StructuredDataDisplay
+ * component based on TYPE, not SCHEMA. No pattern matching for specific key names.
+ */
+
+/**
+ * Check if a value is a primitive (string, number, boolean, null, undefined)
+ *
+ * @param {*} value - Value to check
+ * @returns {boolean} - True if primitive
+ */
+export function isPrimitive(value) {
+  return value === null ||
+         value === undefined ||
+         typeof value === 'string' ||
+         typeof value === 'number' ||
+         typeof value === 'boolean';
+}
+
+/**
+ * Calculate the maximum depth of a nested object/array
+ *
+ * @param {*} obj - Object or array to analyze
+ * @param {number} currentDepth - Current depth (used for recursion)
+ * @returns {number} - Maximum depth
+ */
+export function getStructureDepth(obj, currentDepth = 0) {
+  if (isPrimitive(obj)) {
+    return currentDepth;
+  }
+
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return currentDepth;
+    const depths = obj.map(item => getStructureDepth(item, currentDepth + 1));
+    return Math.max(...depths);
+  }
+
+  if (typeof obj === 'object') {
+    const values = Object.values(obj);
+    if (values.length === 0) return currentDepth;
+    const depths = values.map(val => getStructureDepth(val, currentDepth + 1));
+    return Math.max(...depths);
+  }
+
+  return currentDepth;
+}
+
+/**
+ * Format object key as a human-readable header
+ * Converts: snake_case, camelCase, PascalCase → Title Case
+ *
+ * @param {string} key - Object key to format
+ * @returns {string} - Formatted header
+ */
+export function formatKeyAsHeader(key) {
+  if (typeof key !== 'string') return String(key);
+
+  // Replace underscores with spaces
+  let formatted = key.replace(/_/g, ' ');
+
+  // Add space before capital letters (for camelCase/PascalCase)
+  formatted = formatted.replace(/([a-z])([A-Z])/g, '$1 $2');
+
+  // Capitalize first letter of each word
+  formatted = formatted.replace(/\b\w/g, char => char.toUpperCase());
+
+  return formatted;
+}
+
+/**
+ * Extract JSON from markdown code block if present
+ * Returns null if not a JSON code block
+ *
+ * @param {string} str - String to check
+ * @returns {Object|null} - Parsed JSON object or null
+ */
+export function extractJsonFromMarkdown(str) {
+  if (typeof str !== 'string') return null;
+
+  // Pattern: ```json ... ``` or ```JSON ... ```
+  const jsonBlockPattern = /^```json\s*\n([\s\S]*?)\n```$/i;
+  const match = str.trim().match(jsonBlockPattern);
+
+  if (match) {
+    try {
+      return JSON.parse(match[1]);
+    } catch (e) {
+      // Invalid JSON, return null
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check if value should use the structured renderer (schema-neutral)
+ *
+ * @param {*} value - Value to check
+ * @param {number} maxDepth - Maximum allowed depth (default: 3)
+ * @returns {boolean} - True if should use StructuredDataDisplay
+ */
+export function shouldUseStructuredRenderer(value, maxDepth = 3) {
+  // Check if string contains JSON code block
+  if (typeof value === 'string') {
+    const extracted = extractJsonFromMarkdown(value);
+    if (extracted) {
+      // Recursively check the extracted JSON
+      return shouldUseStructuredRenderer(extracted, maxDepth);
+    }
+    return false;
+  }
+
+  // Primitives → render as-is (number, boolean, null, etc.)
+  if (isPrimitive(value)) {
+    return false;
+  }
+
+  // Leaderboard objects → use LeaderboardDisplay component
+  if (value && typeof value === 'object' && 'leaderboard' in value && Array.isArray(value.leaderboard)) {
+    return false;
+  }
+
+  // Arrays
+  if (Array.isArray(value)) {
+    // Empty arrays → fallback to raw JSON
+    if (value.length === 0) {
+      return false;
+    }
+
+    // Single-item arrays → not worth special rendering
+    if (value.length === 1) {
+      return false;
+    }
+
+    // Check depth
+    const depth = getStructureDepth(value);
+    if (depth > maxDepth) {
+      return false;
+    }
+
+    return true;
+  }
+
+  // Objects
+  if (typeof value === 'object' && value !== null) {
+    // Empty objects → fallback to raw JSON
+    const keys = Object.keys(value);
+    if (keys.length === 0) {
+      return false;
+    }
+
+    // Check depth
+    const depth = getStructureDepth(value);
+    if (depth > maxDepth) {
+      return false;
+    }
+
+    return true;
+  }
+
+  // Everything else → fallback to raw JSON
+  return false;
+}
+
+/**
+ * Prepare value for structured rendering
+ * If value is a JSON code block string, extract and return the JSON
+ * Otherwise return the value as-is
+ *
+ * @param {*} value - Value to prepare
+ * @returns {*} - Prepared value
+ */
+export function prepareForStructuredRenderer(value) {
+  if (typeof value === 'string') {
+    const extracted = extractJsonFromMarkdown(value);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return value;
 }

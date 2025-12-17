@@ -269,3 +269,132 @@ When you get a model request error:
 - Verify account has credits
 - Try a different model to isolate issue
 - Check network connectivity to `openrouter.ai`
+
+## Score & Rank Superstep (Peer Review)
+
+The `score_and_rank` superstep enables anonymous peer review and ranking of worker outputs.
+
+### Quick Start
+
+```json
+{
+  "superstep_type": "score_and_rank",
+  "step_id": "peer_review",
+  "evaluator_models": [
+    "openai/gpt-4o",
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.0-flash-exp"
+  ],
+  "output_write_to": "rankings"
+}
+```
+
+### Key Features
+
+- **Anonymous Evaluation**: Workers identified as "Response A", "Response B", etc.
+- **Parallel Evaluation**: All evaluators judge simultaneously
+- **Algorithmic Aggregation**: Voting algorithms (no LLM synthesis)
+- **Multiple Algorithms**: average_position, borda_count, ranked_pairs, schulze
+
+### Common Patterns
+
+**Pattern 1: Single-Round Review**
+```
+Step 1 (map-reduce): Generate diverse analyses
+Step 2 (score_and_rank): Rank analyses by quality
+Step 3 (map-reduce): Synthesize top-ranked insights
+```
+
+**Pattern 2: Multi-Round Refinement**
+```
+Round 1: Proposals → Ranking
+Round 2: Refinements (based on R1 feedback) → Ranking
+Round 3: Final synthesis
+```
+
+### Configuration Options
+
+```json
+{
+  "superstep_type": "score_and_rank",
+  "step_id": "review",
+  
+  // Who evaluates
+  "evaluator_models": ["model1", "model2", ...],
+  
+  // What criteria
+  "ranking_instructions": "Evaluate based on:\n1. Accuracy\n2. Clarity\n3. Usefulness",
+  
+  // What evaluators see
+  "visibility": {
+    "include_original_input": true,
+    "mask_worker_identities": true,
+    "include_supersteps": ["all"]  // or ["latest"] or [0, 2, 4]
+  },
+  
+  // How to aggregate
+  "ranking_algorithm": "average_position",  // or borda_count, ranked_pairs, schulze
+  
+  // Output format
+  "output_format": "leaderboard",  // or "full" or "rankings_only"
+  
+  // Where to write
+  "output_write_to": "variable_name"
+}
+```
+
+### Output Formats
+
+**leaderboard** (default): Street ranking card with badges
+```json
+{
+  "leaderboard": [
+    {
+      "rank": 1,
+      "worker_id": "gpt-4o_analyst",
+      "model_ref": "openai/gpt-4o",
+      "score": 1.33,
+      "badge": "🥇",
+      "evaluator_consensus": "strong"
+    }
+  ]
+}
+```
+
+**full**: Complete evaluation data for analysis
+
+**rankings_only**: Simple array of worker_ids in order
+
+### Using Rankings in Later Steps
+
+```json
+{
+  "reduce_phase": {
+    "variable_interpolation": true,
+    "chairman_instructions": "Synthesize the final answer using insights from the top-ranked analyses:\n\n${peer_rankings}"
+  }
+}
+```
+
+### Algorithm Comparison
+
+| Algorithm | Best For | Speed |
+|-----------|----------|-------|
+| `average_position` | General use, simple | Fast |
+| `borda_count` | Emphasizing top choices | Fast |
+| `ranked_pairs` | Avoiding paradoxes | Moderate |
+| `schulze` | Maximum fairness | Slow |
+
+### Examples
+
+See complete examples:
+- `examples/workflows/peer_review_analysis.json` - Single-round review
+- `examples/workflows/multi_round_review.json` - Multi-round refinement
+
+### Full Documentation
+
+For comprehensive guide, see [SCORE_AND_RANK_GUIDE.md](SCORE_AND_RANK_GUIDE.md)
+
+---
+
+**Last Updated:** 2025-12-15

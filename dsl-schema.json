@@ -20,6 +20,32 @@
       "description": "Global list of models available for this workflow. Referenced by perspective_matrix or individual workers.",
       "items": { "type": "string" }
     },
+    "scope_alignment": {
+      "type": "object",
+      "description": "Optional: Enable scope alignment to prevent role drift by refining worker responsibilities before execution.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable scope alignment pre-processing"
+        },
+        "coordinator_model": {
+          "type": "string",
+          "default": "openai/gpt-4o",
+          "description": "Model to use for meta-coordination (Phase 2)"
+        },
+        "scope_construction_timeout_ms": {
+          "type": "integer",
+          "default": 30000,
+          "description": "Timeout for Phase 1 scope construction per worker"
+        },
+        "alignment_timeout_ms": {
+          "type": "integer",
+          "default": 30000,
+          "description": "Timeout for Phase 2 scope alignment"
+        }
+      }
+    },
     "variables": {
       "type": "array",
       "description": "The 'Memory' of the flow. These are the keys that can be read/written by Reducers.",
@@ -41,9 +67,20 @@
   },
   "definitions": {
     "Superstep": {
+      "oneOf": [
+        { "$ref": "#/definitions/MapReduceSuperstep" },
+        { "$ref": "#/definitions/ScoreAndRankSuperstep" }
+      ]
+    },
+    "MapReduceSuperstep": {
       "type": "object",
       "required": ["step_id", "map_phase", "reduce_phase"],
       "properties": {
+        "superstep_type": {
+          "type": "string",
+          "const": "map_reduce",
+          "description": "Type of superstep (default: map_reduce)"
+        },
         "step_id": {
           "type": "string",
           "description": "Unique ID for logging and transitioning."
@@ -52,20 +89,11 @@
           "type": "string",
           "description": "Human-readable intent (e.g., 'Gather initial perspectives')."
         },
-        
+
         "// PHASE 1": { "description": "---------------- MAP ----------------" },
         "map_phase": {
           "type": "object",
-          "oneOf": [
-            {
-              "required": ["workers"],
-              "not": { "required": ["perspective_matrix"] }
-            },
-            {
-              "required": ["perspective_matrix"],
-              "not": { "required": ["workers"] }
-            }
-          ],
+          "required": ["perspectives"],
           "properties": {
             "concurrency_limit": {
               "type": "integer",
@@ -75,50 +103,24 @@
               "type": "string",
               "description": "Instruction appended to ALL workers in this step (e.g., 'Be concise')."
             },
-            "workers": {
+            "perspectives": {
               "type": "array",
-              "description": "Explicit list of workers. Mutually exclusive with perspective_matrix.",
+              "description": "Model-neutral instructions (DEFAULT). Each perspective is analyzed by all models unless model_ref is specified for a specific model binding.",
               "items": {
                 "type": "object",
-                "required": ["worker_id", "model_ref"],
+                "required": ["perspective_id", "instruction"],
                 "properties": {
-                  "worker_id": { "type": "string" },
-                  "model_ref": { "type": "string", "description": "Key pointing to the actual model client (e.g., 'gpt-4-turbo')." },
-                  "instruction": { "type": "string", "description": "Instruction for what this worker should analyze/predict (preferred)." },
-                  "role_definition": { "type": "string", "description": "DEPRECATED: Use 'instruction' instead. System prompt specific to this worker." }
-                }
-              }
-            },
-            "perspective_matrix": {
-              "type": "object",
-              "description": "Auto-generate workers as cartesian product of models × perspectives. Mutually exclusive with workers.",
-              "required": ["perspectives"],
-              "properties": {
-                "models": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "description": "DEPRECATED: Specify models at workflow level instead. Explicit model list for this step (overrides workflow.models)."
-                },
-                "use_models": {
-                  "type": "string",
-                  "enum": ["all", "whitelist", "blacklist"],
-                  "default": "all",
-                  "description": "How to select models: 'all' uses workflow.models, 'whitelist' uses only models_filter, 'blacklist' excludes models_filter"
-                },
-                "models_filter": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "description": "Model filter list (used with use_models=whitelist or blacklist)"
-                },
-                "perspectives": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": ["perspective_id", "instruction"],
-                    "properties": {
-                      "perspective_id": { "type": "string", "description": "Unique identifier for this perspective (e.g., 'security_analysis')" },
-                      "instruction": { "type": "string", "description": "What to analyze/predict from this perspective" }
-                    }
+                  "perspective_id": {
+                    "type": "string",
+                    "description": "Unique identifier for this perspective (e.g., 'security_analysis', 'optimist')"
+                  },
+                  "instruction": {
+                    "type": "string",
+                    "description": "What to analyze/predict from this perspective"
+                  },
+                  "model_ref": {
+                    "type": "string",
+                    "description": "OPTIONAL: Bind this perspective to a specific model (special case opt-out from model-neutral default). Example: 'openai/gpt-4'"
                   }
                 }
               }
@@ -194,7 +196,8 @@
             },
             "strategy": {
               "type": "string",
-              "enum": ["council_chairman", "simple_summary", "vote_majority", "subquery_single_model", "cross_interrogation"]
+              "enum": ["council_chairman", "simple_summary", "vote_majority", "subquery_single_model", "cross_interrogation", "column_wise_summary", "score_and_rank"],
+              "description": "Reduction strategy. 'column_wise_summary' groups worker outputs by perspective and creates per-perspective summaries. 'score_and_rank' performs anonymous peer review and ranking."
             },
             "variable_interpolation": {
               "type": "boolean",
@@ -227,8 +230,124 @@
             "chairman_instructions": {
               "type": "string",
               "description": "Specific logic for the decision maker (e.g., 'Side with security if risk > low')."
+            },
+            "ranking_instructions": {
+              "type": "string",
+              "description": "Custom criteria for evaluating responses (used by score_and_rank strategy)."
+            },
+            "evaluator_models": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Models to use as evaluators for score_and_rank strategy (defaults to [model_ref])."
+            },
+            "ranking_algorithm": {
+              "type": "string",
+              "enum": ["average_position", "borda_count", "ranked_pairs", "schulze"],
+              "default": "average_position",
+              "description": "Algorithm to use for score_and_rank strategy."
+            },
+            "output_format": {
+              "type": "string",
+              "enum": ["full", "aggregate_only", "rankings_only"],
+              "default": "full",
+              "description": "Output format for score_and_rank strategy."
+            },
+            "require_complete_rankings": {
+              "type": "boolean",
+              "default": false,
+              "description": "If true, reject evaluations that don't rank all responses (score_and_rank only)."
             }
           }
+        }
+      }
+    },
+    "ScoreAndRankSuperstep": {
+      "type": "object",
+      "description": "Special superstep type for anonymous peer review and ranking. Multiple evaluator models receive full conversation history and rank previous outputs. Rankings are aggregated algorithmically (not by LLM).",
+      "required": ["superstep_type", "step_id", "evaluator_models", "output_write_to"],
+      "properties": {
+        "superstep_type": {
+          "type": "string",
+          "const": "score_and_rank",
+          "description": "Identifies this as a score_and_rank superstep"
+        },
+        "step_id": {
+          "type": "string",
+          "description": "Unique ID for logging and transitioning"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable intent (e.g., 'Peer review of initial analyses')"
+        },
+        "evaluator_models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Models that will judge and rank previous outputs. These models work in parallel, not sequentially."
+        },
+        "ranking_instructions": {
+          "type": "string",
+          "default": "Rank responses by quality, accuracy, and usefulness.",
+          "description": "Custom evaluation criteria for the evaluators"
+        },
+        "visibility": {
+          "type": "object",
+          "description": "Controls what conversation history evaluators see",
+          "properties": {
+            "include_original_input": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include the original user query"
+            },
+            "include_conversation_history": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include full conversation from previous supersteps"
+            },
+            "mask_worker_identities": {
+              "type": "boolean",
+              "default": true,
+              "description": "Anonymize worker IDs to 'Response A', 'Response B', etc."
+            },
+            "include_supersteps": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": { "type": "integer" },
+                  "description": "Specific superstep indices to include (e.g., [0, 1, 2])"
+                },
+                {
+                  "type": "array",
+                  "items": { "enum": ["all", "latest"] },
+                  "maxItems": 1,
+                  "description": "'all' for all previous supersteps, 'latest' for only the immediately previous superstep"
+                }
+              ],
+              "default": ["all"],
+              "description": "Which supersteps to include in conversation history"
+            }
+          }
+        },
+        "ranking_algorithm": {
+          "type": "string",
+          "enum": ["average_position", "borda_count", "ranked_pairs", "schulze"],
+          "default": "average_position",
+          "description": "Algorithm for aggregating rankings: average_position (simple average), borda_count (positional scoring), ranked_pairs (Tideman), schulze (beatpath)"
+        },
+        "output_write_to": {
+          "type": "string",
+          "description": "Variable name to write the ranking results"
+        },
+        "output_format": {
+          "type": "string",
+          "enum": ["leaderboard", "full", "rankings_only"],
+          "default": "leaderboard",
+          "description": "Format of output: leaderboard (street ranking card), full (complete evaluation data), rankings_only (sorted worker IDs)"
+        },
+        "require_complete_rankings": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, reject evaluations that don't rank all responses"
         }
       }
     }

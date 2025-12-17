@@ -13,6 +13,7 @@ export default function ChatInterface({
   onCancelMessage,
   onUpdateModels,
   queryState,
+  errorMessage,
   isReadOnly = false,
 }) {
   const [input, setInput] = useState('');
@@ -66,6 +67,38 @@ export default function ChatInterface({
 
   return (
     <div className="chat-interface">
+      {errorMessage && (
+        <div
+          className="error-banner"
+          style={{
+            backgroundColor: '#fee',
+            border: '1px solid #fcc',
+            padding: '12px',
+            margin: '8px',
+            borderRadius: '4px',
+            color: '#c00',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}
+        >
+          <span><strong>Error:</strong> {errorMessage}</span>
+          <button
+            onClick={() => onSendMessage && onSendMessage('')}
+            style={{
+              background: 'none',
+              border: 'none',
+              fontSize: '20px',
+              cursor: 'pointer',
+              color: '#c00',
+              padding: '0 8px'
+            }}
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="messages-container">
         {conversation.messages.length === 0 ? (
           <div className="empty-state">

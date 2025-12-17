@@ -12,16 +12,16 @@
       "step_id": "debate",
       "description": "Two perspectives, one synthesis",
       "map_phase": {
-        "workers": [
+        "perspectives": [
           {
-            "worker_id": "optimist",
-            "model_ref": "openai/gpt-4",
-            "instruction": "Analyze this from an optimistic perspective. Predict what an optimistic thinker would identify as the key benefits, opportunities, and positive aspects. Focus on the upside potential."
+            "perspective_id": "optimist",
+            "instruction": "Analyze this from an optimistic perspective. Predict what an optimistic thinker would identify as the key benefits, opportunities, and positive aspects. Focus on the upside potential.",
+            "model_ref": "openai/gpt-4"
           },
           {
-            "worker_id": "skeptic",
-            "model_ref": "anthropic/claude-3.5-sonnet",
-            "instruction": "Analyze this from a skeptical perspective. Predict what a critical thinker would identify as the key risks, challenges, and potential problems. Focus on identifying vulnerabilities."
+            "perspective_id": "skeptic",
+            "instruction": "Analyze this from a skeptical perspective. Predict what a critical thinker would identify as the key risks, challenges, and potential problems. Focus on identifying vulnerabilities.",
+            "model_ref": "anthropic/claude-3.5-sonnet"
           }
         ]
       },
@@ -31,7 +31,10 @@
         "output_write_to": "final_answer",
         "visibility": {
           "include_original_input": true,
-          "mask_worker_identities": false
+          "mask_worker_identities": false,
+          "include_rejected_items": false,
+          "include_conversation_history": true,
+          "include_worker_outputs": true
         },
         "chairman_instructions": "Balance both the optimistic and skeptical perspectives into a nuanced, well-reasoned answer that acknowledges both benefits and risks."
       }

@@ -7,13 +7,7 @@ import {
   getDefaultChairmanModel,
   strategySupportsFeature
 } from '../utils/strategyTemplates.js';
-
-const MODEL_OPTIONS = [
-  { value: models.GPT4, label: 'GPT-4' },
-  { value: models.GPT4_TURBO, label: 'GPT-4 Turbo' },
-  { value: models.CLAUDE_SONNET, label: 'Claude Sonnet' },
-  { value: models.GEMINI_FLASH, label: 'Gemini Flash' }
-];
+import ModelSelect from '../components/ModelSelect.jsx';
 
 const INTERACTION_MODE_OPTIONS = [
   {
@@ -75,7 +69,7 @@ function Step4DeliberationStrategy({ state, onChange, onNext, onBack }) {
       <div className="step-header">
         <h2>Step 4: How Delegates Collaborate & How We Collect the Answer</h2>
         <p className="step-description">
-          Decide how delegates work together and how their answers are collected into one final answer.
+          Choose how perspectives collaborate and reach a final decision.
         </p>
       </div>
 
@@ -152,22 +146,15 @@ function Step4DeliberationStrategy({ state, onChange, onNext, onBack }) {
             {/* Chairman Configuration */}
             {decisionMaker.type === DECISION_MAKER_TYPES.CHAIRMAN && (
               <div className="chairman-config">
-                <div className="form-group">
-                  <label>Collector Model</label>
-                  <select
-                    value={decisionMaker.model || ''}
-                    onChange={(e) => updateDecisionMaker('model', e.target.value)}
-                  >
-                    {MODEL_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="help-text">
-                    Typically a stronger or more reliable model than the delegates, used only to collect and decide the final answer.
-                  </span>
-                </div>
+                <ModelSelect
+                  value={decisionMaker.model || ''}
+                  onChange={(modelRef) => updateDecisionMaker('model', modelRef)}
+                  globalModels={state.globalModels}
+                  label="Collector Model"
+                />
+                <span className="help-text">
+                  Model used to synthesize the final answer.
+                </span>
 
                 <div className="form-group">
                   <label>
@@ -180,7 +167,7 @@ function Step4DeliberationStrategy({ state, onChange, onNext, onBack }) {
                     rows={3}
                   />
                   <span className="help-text">
-                    Extra guidance for how the collector should compare delegate answers, resolve conflicts, and choose the final answer.
+                    How to compare answers and resolve conflicts.
                   </span>
                 </div>
               </div>
@@ -245,13 +232,11 @@ function Step4DeliberationStrategy({ state, onChange, onNext, onBack }) {
         )}
 
         <div className="info-box">
-          <strong>💡 Choosing how to collect and decide:</strong>
+          <strong>💡 Quick Guide:</strong>
           <ul>
-            <li><strong>Independent → Collector:</strong> Best default; each delegate answers, then a collector synthesizes</li>
-            <li><strong>Debate:</strong> Use when you want delegates to question each other for deeper insight (slower)</li>
-            <li><strong>Blind Review:</strong> Good when you want unbiased evaluation across models</li>
-            <li><strong>Voting:</strong> Works well for clear yes/no or discrete options</li>
-            <li><strong>Multi-Stage:</strong> Most thorough; for high-stakes or complex decisions</li>
+            <li><strong>Independent → Collector:</strong> Best default (fastest)</li>
+            <li><strong>Debate:</strong> Deeper insight, slower</li>
+            <li><strong>Blind Review:</strong> Unbiased evaluation</li>
           </ul>
         </div>
       </div>

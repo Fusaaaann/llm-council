@@ -2,7 +2,7 @@
 
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from backend.config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
 
 async def query_model(
@@ -43,8 +43,14 @@ async def query_model(
             data = response.json()
             message = data['choices'][0]['message']
 
+            content = message.get('content', '')
+
+            # Debug: log if we got empty or None content
+            if not content:
+                print(f"[WARNING] Model {model} returned empty/None content. Full message: {message}")
+
             return {
-                'content': message.get('content'),
+                'content': content or '',  # Ensure we never return None
                 'reasoning_details': message.get('reasoning_details')
             }
 

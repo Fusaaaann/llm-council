@@ -37,6 +37,12 @@ async def execute_reducer(
     elif strategy == 'cross_interrogation':
         return await cross_interrogation(worker_outputs, memory, config)
 
+    elif strategy == 'column_wise_summary':
+        return await column_wise_summary(worker_outputs, memory, config)
+
+    elif strategy == 'score_and_rank':
+        return await score_and_rank(worker_outputs, memory, config)
+
     else:
         raise ValueError(f"Unknown reducer strategy: {strategy}")
 
@@ -97,13 +103,30 @@ Provide a clear, well-reasoned final answer:"""
     # Build messages
     chairman_messages = messages[:-1] + [{"role": "user", "content": chairman_prompt}]
 
+    # Debug logging
+    print(f"[DEBUG] Querying chairman model: {model_ref}")
+    print(f"[DEBUG] Chairman prompt length: {len(chairman_prompt)} chars")
+    print(f"[DEBUG] Message history length: {len(chairman_messages)} messages")
+
     # Query chairman model
     response = await query_model(model_ref, chairman_messages)
 
     if response is None:
-        return "Error: Unable to generate synthesis."
+        error_msg = f"Error: Chairman model '{model_ref}' failed to respond. Please check model availability and API connectivity."
+        print(f"[ERROR] {error_msg}")
+        return error_msg
 
-    return response.get('content', '')
+    content = response.get('content', '')
+
+    # Check if content is empty
+    if not content or not content.strip():
+        error_msg = f"Error: Chairman model '{model_ref}' returned empty response. Check chairman_instructions and ensure the model can handle the request."
+        print(f"[ERROR] {error_msg}")
+        print(f"[DEBUG] Full response object: {response}")
+        return error_msg
+
+    print(f"[DEBUG] Chairman returned {len(content)} chars")
+    return content
 
 
 async def simple_summary(
@@ -347,3 +370,120 @@ async def cross_interrogation(
     }
 
     return json.dumps(result, indent=2)
+
+
+async def column_wise_summary(
+    worker_outputs: List[Dict[str, Any]],
+    memory: 'WorkflowMemory',
+    config: Dict[str, Any]
+) -> str:
+    """
+    Column-wise summary strategy for perspective-based analysis.
+
+    Groups worker outputs by perspective (column), then summarizes each perspective
+    by comparing how different models analyzed it.
+
+    Assumptions:
+    - Worker IDs follow format: "{model_name}_{perspective_id}"
+    - Each perspective has multiple models analyzing it
+
+    Example:
+        Input worker_outputs:
+            - gpt-4_security: "..."
+            - claude_security: "..."
+            - gemini_security: "..."
+            - gpt-4_ux: "..."
+            - claude_ux: "..."
+            - gemini_ux: "..."
+
+        Output (JSON string):
+            {
+                "security": "GPT-4 emphasized X, Claude noted Y, Gemini highlighted Z...",
+                "ux": "All models agreed on A, but GPT-4 uniquely identified B..."
+            }
+
+    Args:
+        worker_outputs: Worker outputs with perspective-based worker IDs
+        memory: Workflow memory
+        config: Configuration with model_ref, chairman_instructions, messages
+
+    Returns:
+        JSON string mapping perspective_id to summary
+    """
+    import json
+    from collections import defaultdict
+    from .openrouter import query_model
+
+    model_ref = config['model_ref']
+    chairman_instructions = config.get('chairman_instructions', '')
+    messages = config.get('messages', [])
+    visibility = config.get('visibility', {})
+
+    # Group outputs by perspective
+    # Parse worker_id format: "{model_name}_{perspective_id}"
+    perspective_outputs = defaultdict(dict)
+
+    for output in worker_outputs:
+        worker_id = output['worker_id']
+
+        # Split worker_id to extract model and perspective
+        # Handle multi-part model names (e.g., "gpt-4-turbo_security")
+        parts = worker_id.split('_')
+        if len(parts) >= 2:
+            # Last part is perspective_id, everything before is model name
+            perspective_id = parts[-1]
+            model_name = '_'.join(parts[:-1])
+
+            perspective_outputs[perspective_id][model_name] = output.get('response', output.get('output', ''))
+
+    # If no perspectives found, fall back to simple summary
+    if not perspective_outputs:
+        return await simple_summary(worker_outputs, memory, config)
+
+    # Synthesize each perspective column-wise
+    perspective_summaries = {}
+
+    for perspective_id, model_outputs in perspective_outputs.items():
+        # Format outputs for this perspective
+        outputs_text = "\n\n".join([
+            f"**{model_name}**: {output}"
+            for model_name, output in model_outputs.items()
+        ])
+
+        # Include original input if visibility allows
+        original_input = ""
+        if visibility.get('include_original_input', True) and messages:
+            user_query = messages[-1]['content']
+            original_input = f"Original Question: {user_query}\n\n"
+
+        # Build perspective-specific synthesis prompt
+        perspective_prompt = f"""You are synthesizing multiple models' analyses of the "{perspective_id}" perspective.
+
+{original_input}Perspective: {perspective_id}
+
+Different models analyzed this perspective:
+{outputs_text}
+
+{chairman_instructions}
+
+Your task: Compare and synthesize how different models analyzed this perspective.
+- Identify common themes and consensus
+- Note unique insights from specific models
+- Highlight any disagreements or different emphasis
+- Provide a balanced synthesis that captures the full picture
+
+Provide a clear synthesis for the "{perspective_id}" perspective:"""
+
+        # Build messages for this perspective
+        perspective_messages = messages[:-1] + [{"role": "user", "content": perspective_prompt}] if messages else [{"role": "user", "content": perspective_prompt}]
+
+        # Query model to synthesize this perspective
+        response = await query_model(model_ref, perspective_messages)
+
+        if response is None:
+            perspective_summaries[perspective_id] = "Error: Unable to generate synthesis for this perspective."
+        else:
+            perspective_summaries[perspective_id] = response.get('content', '')
+
+    # Return as JSON string (structured output)
+    return json.dumps(perspective_summaries, indent=2)

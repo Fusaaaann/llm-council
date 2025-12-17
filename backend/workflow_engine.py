@@ -1,7 +1,11 @@
 """Core workflow execution engine following BSP architecture."""
 
 import json
+import logging
 from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
+from backend.json_utils import parse_json_safe
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowMemory:
@@ -36,7 +40,7 @@ class WorkflowMemory:
 
     def write(self, var_name: str, value: Any) -> None:
         """
-        Write variable value with type checking.
+        Write variable value with type checking and auto-coercion.
 
         Args:
             var_name: Variable name
@@ -48,11 +52,78 @@ class WorkflowMemory:
         if var_name not in self.variables:
             raise ValueError(f"Variable '{var_name}' not defined")
 
-        # Validate type matches definition
+        # Get expected type and apply coercion if needed
         expected_type = self.types[var_name]
-        self._validate_type(value, expected_type)
+        coerced_value = self._coerce_type(value, expected_type, var_name)
 
-        self.variables[var_name] = value
+        # Validate the coerced value
+        self._validate_type(coerced_value, expected_type)
+
+        self.variables[var_name] = coerced_value
+
+    def _coerce_type(self, value: Any, expected_type: str, var_name: str) -> Any:
+        """
+        Attempt to coerce value to expected type.
+
+        This handles common mismatches, especially when LLMs return JSON strings
+        instead of parsed objects.
+
+        Args:
+            value: Value to coerce
+            expected_type: Target type ('string', 'json_object', 'list')
+            var_name: Variable name (for logging)
+
+        Returns:
+            Coerced value
+
+        Raises:
+            ValueError: If coercion fails
+        """
+        # If types already match, no coercion needed
+        if expected_type == 'string' and isinstance(value, str):
+            return value
+        elif expected_type == 'list' and isinstance(value, list):
+            return value
+        elif expected_type == 'json_object' and isinstance(value, dict):
+            return value
+
+        # Attempt coercion for common mismatches
+        if expected_type == 'json_object' and isinstance(value, str):
+            # LLM returned JSON as string - parse it with robust extraction
+            success, parsed, error = parse_json_safe(value, expected_type=dict, var_name=var_name)
+
+            if success:
+                logger.info(f"Auto-parsed JSON string to object for variable '{var_name}'")
+                return parsed
+            else:
+                # Check if empty string for better error message
+                if not value.strip():
+                    raise ValueError(
+                        f"Variable '{var_name}' expects json_object, but got empty string. "
+                        f"The reducer likely failed or returned no content. Check model logs above for details."
+                    )
+                else:
+                    raise ValueError(error)
+
+        elif expected_type == 'list' and isinstance(value, str):
+            # Try parsing string as JSON list with robust extraction
+            success, parsed, error = parse_json_safe(value, expected_type=list, var_name=var_name)
+
+            if success:
+                logger.info(f"Auto-parsed JSON string to list for variable '{var_name}'")
+                return parsed
+            else:
+                # Check if empty string for better error message
+                if not value.strip():
+                    raise ValueError(
+                        f"Variable '{var_name}' expects list, but got empty string. "
+                        f"The reducer likely failed or returned no content. Check model logs above for details."
+                    )
+                else:
+                    raise ValueError(error)
+
+        # No coercion available, return as-is and let validation catch it
+        return value
 
     def _validate_type(self, value: Any, expected_type: str) -> None:
         """
@@ -97,6 +168,9 @@ class WorkflowExecutor:
         self.global_timeout_ms = workflow_def.get('global_timeout_ms', 60000)
         self.global_models = workflow_def.get('models', [])
         self.worker_outputs_by_step = {}  # Track worker outputs per superstep
+        self.superstep_results = []  # Track reducer outputs with metadata
+        self.scope_map = {}  # Refined scope definitions (populated if scope_alignment enabled)
+        self.scope_alignment_enabled = False  # Track if alignment was performed
 
     async def execute_stream(
         self,
@@ -116,6 +190,9 @@ class WorkflowExecutor:
         # Build message history
         messages = self._build_message_history(conversation, user_input)
 
+        # Run scope alignment if enabled (silent pre-execution phase)
+        await self._run_scope_alignment_if_enabled(user_input)
+
         # Stream init event
         yield self._send_event("stream_init", {
             "workflow_id": self.workflow['flow_id'],
@@ -125,68 +202,94 @@ class WorkflowExecutor:
         # Execute each superstep
         for superstep in self.workflow['supersteps']:
             step_id = superstep['step_id']
+            superstep_type = superstep.get('superstep_type', 'map_reduce')
 
-            # MAP PHASE
-            yield self._send_event(f"superstep_{step_id}_map_start", {
-                "step_id": step_id,
-                "description": superstep.get('description', '')
-            })
+            # Dispatch to appropriate executor based on superstep type
+            if superstep_type == 'score_and_rank':
+                # SCORE AND RANK SUPERSTEP
+                async for event in self._execute_score_and_rank_superstep(
+                    superstep,
+                    user_input,
+                    conversation
+                ):
+                    yield event
 
-            # Apply variable interpolation if enabled
-            map_phase = superstep['map_phase']
-            if superstep.get('reduce_phase', {}).get('variable_interpolation', False):
-                map_phase = self._apply_interpolation_to_map_phase(map_phase)
-
-            worker_outputs = await self._execute_map_phase(
-                map_phase,
-                messages
-            )
-
-            # Store worker outputs for this step
-            self.worker_outputs_by_step[step_id] = worker_outputs
-
-            yield self._send_event(f"superstep_{step_id}_map_complete", {
-                "step_id": step_id,
-                "worker_count": len(worker_outputs),
-                "worker_outputs": worker_outputs
-            })
-
-            # MIDDLEWARE PHASE (optional)
-            rejected = []
-            if 'middleware_phase' in superstep and superstep['middleware_phase']:
-                processed, rejected = await self._execute_middleware_phase(
-                    worker_outputs,
-                    superstep['middleware_phase']
-                )
-                worker_outputs = processed
-
-                yield self._send_event(f"superstep_{step_id}_middleware_complete", {
+            else:
+                # MAP-REDUCE SUPERSTEP (default)
+                # MAP PHASE
+                yield self._send_event(f"superstep_{step_id}_map_start", {
                     "step_id": step_id,
-                    "processed_count": len(processed),
-                    "rejected_count": len(rejected)
+                    "description": superstep.get('description', '')
                 })
 
-            # REDUCE PHASE
-            yield self._send_event(f"superstep_{step_id}_reduce_start", {
-                "step_id": step_id
-            })
+                # Apply variable interpolation if enabled
+                map_phase = superstep['map_phase']
+                if superstep.get('reduce_phase', {}).get('variable_interpolation', False):
+                    map_phase = self._apply_interpolation_to_map_phase(map_phase)
 
-            result = await self._execute_reduce_phase(
-                superstep['reduce_phase'],
-                worker_outputs,
-                messages,
-                rejected
-            )
+                worker_outputs = await self._execute_map_phase(
+                    map_phase,
+                    messages
+                )
 
-            # Write to variable
-            output_var = superstep['reduce_phase']['output_write_to']
-            self.memory.write(output_var, result)
+                # Store worker outputs for this step
+                self.worker_outputs_by_step[step_id] = worker_outputs
 
-            yield self._send_event(f"superstep_{step_id}_reduce_complete", {
-                "step_id": step_id,
-                "output_variable": output_var,
-                "result": result
-            })
+                yield self._send_event(f"superstep_{step_id}_map_complete", {
+                    "step_id": step_id,
+                    "worker_count": len(worker_outputs),
+                    "worker_outputs": worker_outputs
+                })
+
+                # MIDDLEWARE PHASE (optional)
+                rejected = []
+                if 'middleware_phase' in superstep and superstep['middleware_phase']:
+                    processed, rejected = await self._execute_middleware_phase(
+                        worker_outputs,
+                        superstep['middleware_phase']
+                    )
+                    worker_outputs = processed
+
+                    yield self._send_event(f"superstep_{step_id}_middleware_complete", {
+                        "step_id": step_id,
+                        "processed_count": len(processed),
+                        "rejected_count": len(rejected)
+                    })
+
+                # REDUCE PHASE
+                yield self._send_event(f"superstep_{step_id}_reduce_start", {
+                    "step_id": step_id
+                })
+
+                result = await self._execute_reduce_phase(
+                    superstep['reduce_phase'],
+                    worker_outputs,
+                    messages,
+                    rejected
+                )
+
+                # Write to variable
+                output_var = superstep['reduce_phase']['output_write_to']
+                self.memory.write(output_var, result)
+
+                # Track reducer output with metadata for UI display
+                from datetime import datetime, timezone
+                self.superstep_results.append({
+                    'step_id': step_id,
+                    'superstep_type': 'map_reduce',
+                    'reducer_strategy': superstep['reduce_phase']['strategy'],
+                    'reducer_model': superstep['reduce_phase']['model_ref'],
+                    'output_variable': output_var,
+                    'output_value': result,
+                    'worker_count': len(worker_outputs),
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                })
+
+                yield self._send_event(f"superstep_{step_id}_reduce_complete", {
+                    "step_id": step_id,
+                    "output_variable": output_var,
+                    "result": result
+                })
 
             # Save partial state after each superstep
             await self._save_partial_state(conversation, step_id)
@@ -228,6 +331,16 @@ class WorkflowExecutor:
             async with semaphore:
                 # Build worker prompt (support both 'instruction' and legacy 'role_definition')
                 instruction = worker.get('instruction') or worker.get('role_definition', '')
+
+                # Apply scope alignment if enabled
+                if self.scope_alignment_enabled:
+                    from .scope_alignment import apply_scope_to_instruction
+                    instruction = apply_scope_to_instruction(
+                        worker['worker_id'],
+                        instruction,
+                        self.scope_map
+                    )
+
                 if global_instruction:
                     instruction += f"\n\n{global_instruction}"
 
@@ -258,13 +371,16 @@ class WorkflowExecutor:
                 worker_outputs.append(result)
             elif isinstance(result, Exception):
                 # Log error but continue
-                print(f"Worker execution error: {result}")
+                logger.error(f"Worker execution error: {result}", exc_info=True)
 
         return worker_outputs
 
     def _expand_map_phase_workers(self, map_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Expand workers from either explicit workers list or perspective_matrix.
+        Expand workers from perspectives array (unified DSL).
+
+        Model-neutral by default: Each perspective without model_ref creates N workers (one per workflow model).
+        Model-specific opt-out: Perspectives with model_ref create 1 worker.
 
         Args:
             map_config: Map phase configuration
@@ -272,68 +388,35 @@ class WorkflowExecutor:
         Returns:
             List of worker definitions
         """
-        # Explicit workers list
-        if 'workers' in map_config:
-            return map_config['workers']
+        perspectives = map_config.get('perspectives', [])
+        workers = []
 
-        # Perspective matrix - generate cartesian product
-        if 'perspective_matrix' in map_config:
-            matrix = map_config['perspective_matrix']
-            perspectives = matrix['perspectives']
+        for perspective in perspectives:
+            perspective_id = perspective['perspective_id']
+            instruction = perspective['instruction']
 
-            # Determine which models to use
-            models = self._select_models(matrix)
-
-            workers = []
-            for model_ref in models:
-                # Extract short model name for worker_id (e.g., 'openai/gpt-4' -> 'gpt-4')
+            if 'model_ref' in perspective:
+                # Model-specific (opt-out case): Create single worker
+                model_ref = perspective['model_ref']
                 model_short = model_ref.split('/')[-1]
-
-                for perspective in perspectives:
-                    worker_id = f"{model_short}_{perspective['perspective_id']}"
+                worker_id = f"{model_short}_{perspective_id}"
+                workers.append({
+                    'worker_id': worker_id,
+                    'model_ref': model_ref,
+                    'instruction': instruction
+                })
+            else:
+                # Model-neutral (default): Create worker for each workflow model
+                for model_ref in self.workflow.get('models', []):
+                    model_short = model_ref.split('/')[-1]
+                    worker_id = f"{model_short}_{perspective_id}"
                     workers.append({
                         'worker_id': worker_id,
                         'model_ref': model_ref,
-                        'instruction': perspective['instruction']
+                        'instruction': instruction
                     })
 
-            return workers
-
-        # Fallback (should not happen if schema validation works)
-        return []
-
-    def _select_models(self, matrix_config: Dict[str, Any]) -> List[str]:
-        """
-        Select models for perspective_matrix based on filtering rules.
-
-        Args:
-            matrix_config: perspective_matrix configuration
-
-        Returns:
-            List of model references to use
-        """
-        # Legacy: explicit models in perspective_matrix (backwards compat)
-        if 'models' in matrix_config:
-            return matrix_config['models']
-
-        # Use global models with filtering
-        use_models = matrix_config.get('use_models', 'all')
-
-        if use_models == 'all':
-            return self.global_models
-
-        models_filter = matrix_config.get('models_filter', [])
-
-        if use_models == 'whitelist':
-            # Only use models in the filter
-            return [m for m in self.global_models if m in models_filter]
-
-        if use_models == 'blacklist':
-            # Use all models except those in the filter
-            return [m for m in self.global_models if m not in models_filter]
-
-        # Fallback to all models
-        return self.global_models
+        return workers
 
     async def _execute_middleware_phase(
         self,
@@ -410,6 +493,232 @@ class WorkflowExecutor:
         )
 
         return result
+
+    async def _execute_score_and_rank_superstep(
+        self,
+        superstep: Dict[str, Any],
+        user_input: str,
+        conversation: Dict[str, Any]
+    ) -> AsyncGenerator[str, None]:
+        """
+        Execute score_and_rank superstep: anonymous peer review and ranking.
+
+        This is a special superstep type where multiple evaluator models receive
+        the full conversation history (anonymized) and rank previous outputs.
+        Rankings are aggregated algorithmically (not by LLM).
+
+        Args:
+            superstep: Score and rank superstep configuration
+            user_input: Original user query
+            conversation: Full conversation object
+
+        Yields:
+            SSE event strings
+        """
+        from .openrouter import query_model
+        from .ranking_utils import (
+            create_anonymous_labels,
+            build_ranking_prompt,
+            parse_ranking_from_text,
+            calculate_aggregate_rankings,
+            format_leaderboard
+        )
+        import asyncio
+
+        step_id = superstep['step_id']
+        evaluator_models = superstep['evaluator_models']
+        ranking_instructions = superstep.get('ranking_instructions', 'Rank responses by quality, accuracy, and usefulness.')
+        visibility = superstep.get('visibility', {})
+        ranking_algorithm = superstep.get('ranking_algorithm', 'average_position')
+        output_format = superstep.get('output_format', 'leaderboard')
+        output_var = superstep['output_write_to']
+        require_complete = superstep.get('require_complete_rankings', False)
+
+        # Start event
+        yield self._send_event(f"superstep_{step_id}_score_and_rank_start", {
+            "step_id": step_id,
+            "description": superstep.get('description', ''),
+            "evaluator_count": len(evaluator_models),
+            "algorithm": ranking_algorithm
+        })
+
+        # 1. Collect conversation history from previous supersteps
+        include_supersteps = visibility.get('include_supersteps', ['all'])
+        include_original_input = visibility.get('include_original_input', True)
+        mask_identities = visibility.get('mask_worker_identities', True)
+
+        # Determine which supersteps to include
+        if include_supersteps == ['all']:
+            # Include all previous supersteps
+            included_steps = list(self.worker_outputs_by_step.keys())
+        elif include_supersteps == ['latest']:
+            # Only the most recent superstep
+            if self.worker_outputs_by_step:
+                included_steps = [list(self.worker_outputs_by_step.keys())[-1]]
+            else:
+                included_steps = []
+        else:
+            # Specific indices
+            all_steps = list(self.worker_outputs_by_step.keys())
+            included_steps = [all_steps[i] for i in include_supersteps if i < len(all_steps)]
+
+        # Collect worker outputs from included supersteps
+        all_worker_outputs = []
+        for step_key in included_steps:
+            all_worker_outputs.extend(self.worker_outputs_by_step[step_key])
+
+        if not all_worker_outputs:
+            # No outputs to rank - skip this superstep
+            yield self._send_event(f"superstep_{step_id}_score_and_rank_complete", {
+                "step_id": step_id,
+                "output_variable": output_var,
+                "result": {"error": "No worker outputs to rank"}
+            })
+            self.memory.write(output_var, {"error": "No worker outputs to rank"})
+            return
+
+        # 2. Anonymize worker identities (Response A, B, C...)
+        labels, label_to_worker = create_anonymous_labels(
+            all_worker_outputs,
+            id_field='worker_id'
+        )
+
+        # Build mapping of worker_id to model_ref for final output
+        worker_to_model = {
+            output['worker_id']: output.get('model_ref', output['worker_id'])
+            for output in all_worker_outputs
+        }
+
+        # Create anonymized responses dict for prompt
+        anonymized_responses = {}
+        worker_id_to_label = {}
+        for i, output in enumerate(all_worker_outputs):
+            label = f"Response {labels[i]}"
+            anonymized_responses[label] = output.get('response', output.get('output', ''))
+            worker_id_to_label[output['worker_id']] = label
+
+        # 3. Build evaluation prompt
+        question = user_input if include_original_input else "The following responses:"
+        ranking_prompt = build_ranking_prompt(
+            question=question,
+            responses=anonymized_responses,
+            custom_instructions=ranking_instructions
+        )
+
+        # 4. Query evaluators in parallel
+        async def query_evaluator(model_ref: str) -> Optional[Dict[str, Any]]:
+            """Query a single evaluator model."""
+            messages = [{"role": "user", "content": ranking_prompt}]
+            response = await query_model(model_ref, messages)
+
+            if response is not None:
+                ranking_text = response.get('content', '')
+                parsed_ranking = parse_ranking_from_text(ranking_text)
+
+                # Validate completeness if required
+                if require_complete and len(parsed_ranking) != len(labels):
+                    logger.warning(f"Warning: {model_ref} provided incomplete ranking ({len(parsed_ranking)}/{len(labels)})")
+                    return None
+
+                return {
+                    'evaluator_model': model_ref,
+                    'ranking_text': ranking_text,
+                    'parsed_ranking': parsed_ranking
+                }
+            return None
+
+        # Execute all evaluators in parallel
+        tasks = [query_evaluator(model) for model in evaluator_models]
+        evaluator_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Filter out None and exceptions
+        valid_rankings = []
+        for i, result in enumerate(evaluator_results):
+            if isinstance(result, dict):
+                valid_rankings.append(result)
+
+                # Emit individual evaluator complete event
+                yield self._send_event(f"superstep_{step_id}_evaluator_complete", {
+                    "step_id": step_id,
+                    "evaluator_model": result['evaluator_model'],
+                    "ranking": result['parsed_ranking']
+                })
+            elif isinstance(result, Exception):
+                logger.error(f"Evaluator execution error: {result}", exc_info=True)
+
+        if not valid_rankings:
+            # No valid rankings - return error
+            error_result = {"error": "All evaluators failed"}
+            yield self._send_event(f"superstep_{step_id}_score_and_rank_complete", {
+                "step_id": step_id,
+                "output_variable": output_var,
+                "result": error_result
+            })
+            self.memory.write(output_var, error_result)
+            return
+
+        # 5. Aggregate rankings algorithmically
+        aggregate_rankings = calculate_aggregate_rankings(
+            evaluator_rankings=valid_rankings,
+            label_to_worker=label_to_worker,
+            algorithm=ranking_algorithm,
+            id_field='worker_id'
+        )
+
+        # 6. Format output based on output_format
+        if output_format == 'leaderboard':
+            # Format as street ranking card
+            result = format_leaderboard(
+                aggregate_rankings=aggregate_rankings,
+                model_refs=worker_to_model,
+                label_to_worker=label_to_worker
+            )
+        elif output_format == 'full':
+            # Include all data
+            result = {
+                "aggregate_rankings": aggregate_rankings,
+                "evaluator_rankings": valid_rankings,
+                "label_mapping": label_to_worker,
+                "worker_to_model": worker_to_model,
+                "algorithm": ranking_algorithm
+            }
+        elif output_format == 'rankings_only':
+            # Just the sorted worker IDs
+            result = [entry['worker_id'] for entry in aggregate_rankings]
+        else:
+            result = {"error": f"Unknown output_format: {output_format}"}
+
+        # 7. Write to variable
+        self.memory.write(output_var, result)
+
+        # Track score_and_rank output with metadata for UI display
+        from datetime import datetime, timezone
+        evaluated_count = 0
+        if isinstance(result, dict):
+            if 'leaderboard' in result:
+                evaluated_count = len(result.get('leaderboard', []))
+            elif 'aggregate_rankings' in result:
+                evaluated_count = len(result.get('aggregate_rankings', []))
+
+        self.superstep_results.append({
+            'step_id': step_id,
+            'superstep_type': 'score_and_rank',
+            'evaluator_models': superstep['evaluator_models'],
+            'ranking_algorithm': ranking_algorithm,
+            'output_variable': output_var,
+            'output_value': result,
+            'evaluated_count': evaluated_count,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+
+        # Complete event
+        yield self._send_event(f"superstep_{step_id}_score_and_rank_complete", {
+            "step_id": step_id,
+            "output_variable": output_var,
+            "result": result,
+            "evaluator_count": len(valid_rankings),
+            "algorithm": ranking_algorithm
+        })
 
     def _apply_visibility_controls(
         self,
@@ -541,6 +850,40 @@ class WorkflowExecutor:
 
         return re.sub(r'\$\{(\w+)\}', replace_var, text)
 
+    async def _run_scope_alignment_if_enabled(self, user_input: str) -> None:
+        """
+        Run scope alignment if enabled in workflow config.
+
+        This is a silent pre-execution phase that refines worker role definitions
+        to prevent role drift, overlaps, and gaps.
+
+        Args:
+            user_input: User's task description (used as TaskSpec)
+        """
+        scope_config = self.workflow.get('scope_alignment', {})
+
+        if not scope_config.get('enabled', False):
+            return
+
+        try:
+            from .scope_alignment import execute_scope_alignment
+
+            # Run scope alignment
+            self.scope_map = await execute_scope_alignment(
+                workflow_def=self.workflow,
+                task_spec=user_input,
+                config=scope_config
+            )
+
+            # Mark as enabled if we got scopes back
+            if self.scope_map:
+                self.scope_alignment_enabled = True
+        except Exception as e:
+            # Silent failure - fall back to original instructions
+            logger.warning(f"Scope alignment failed: {e}", exc_info=True)
+            self.scope_map = {}
+            self.scope_alignment_enabled = False
+
     def _send_event(self, event_type: str, data: Any) -> str:
         """
         Format SSE event.
@@ -600,6 +943,15 @@ class WorkflowExecutor:
             conversation_id=conversation_id,
             stage_name="worker_outputs",
             stage_data=self.worker_outputs_by_step,
+            metadata=None,  # Already saved above
+            profile_id=profile_id
+        )
+
+        # Save superstep results (reducer outputs with metadata)
+        storage.save_partial_assistant_message(
+            conversation_id=conversation_id,
+            stage_name="superstep_results",
+            stage_data=self.superstep_results,
             metadata=None,  # Already saved above
             profile_id=profile_id
         )
